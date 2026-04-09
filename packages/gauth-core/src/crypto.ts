@@ -28,6 +28,8 @@ export async function computeScopeChecksum(scope: {
   phase: string;
   allowed_paths?: string[];
   denied_paths?: string[];
+  allowed_regions?: string[];
+  allowed_sectors?: string[];
   active_modules?: string[];
   tool_permissions_hash: string;
   platform_permissions_hash: string;
@@ -37,6 +39,8 @@ export async function computeScopeChecksum(scope: {
     phase: scope.phase,
     allowed_paths: scope.allowed_paths ?? [],
     denied_paths: scope.denied_paths ?? [],
+    allowed_regions: scope.allowed_regions ?? [],
+    allowed_sectors: scope.allowed_sectors ?? [],
     active_modules: scope.active_modules ?? [],
     tool_permissions_hash: scope.tool_permissions_hash,
     platform_permissions_hash: scope.platform_permissions_hash,

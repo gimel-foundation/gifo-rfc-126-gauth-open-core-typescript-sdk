@@ -13,6 +13,7 @@ import type {
   GAuthJWTClaims,
   PoAScope,
   ToolPolicy,
+  ToolPolicyConstraints,
   ViolationCode,
 } from "./types.js";
 import {
@@ -58,30 +59,30 @@ async function parseCredential(
   credRef: CredentialReference,
   opts: PEPOptions,
 ): Promise<ParsedCredential> {
-  if (credRef.poa_snapshot) {
-    const snap = credRef.poa_snapshot as Record<string, unknown>;
-    const scope = (snap.scope ?? snap) as PoAScope;
-    return {
-      poa: scope,
-      subject: (snap.subject as string) ?? "",
-      mandateId: snap.mandate_id as string | undefined,
-      mandateStatus: snap.mandate_status as string | undefined,
-      approvalMode: (snap.approval_mode as string) ?? "supervised",
-      delegationChain: snap.delegation_chain as ParsedCredential["delegationChain"],
-    };
-  }
-
   if (credRef.format === "jwt" && credRef.token && opts.tokenValidation) {
     const validated = await validateExtendedToken(credRef.token, opts.tokenValidation);
     const claims = validated.claims;
+    const coreVerbs: Record<string, ToolPolicy> = {};
+    if (claims.gauth.scope.core_verbs) {
+      for (const [verb, policy] of Object.entries(claims.gauth.scope.core_verbs)) {
+        coreVerbs[verb] = {
+          allowed: policy.allowed,
+          cost_cents_base: policy.cost_cents_base,
+          constraints: policy.constraints as ToolPolicyConstraints | undefined,
+        };
+      }
+    }
     return {
       poa: {
         governance_profile: claims.gauth.scope.governance_profile,
         phase: claims.gauth.scope.phase,
-        core_verbs: {} as Record<string, ToolPolicy>,
+        core_verbs: coreVerbs,
         active_modules: claims.gauth.scope.active_modules,
         allowed_paths: claims.gauth.scope.allowed_paths,
         denied_paths: claims.gauth.scope.denied_paths,
+        allowed_regions: claims.gauth.scope.allowed_regions,
+        allowed_sectors: claims.gauth.scope.allowed_sectors,
+        platform_permissions: claims.gauth.scope.platform_permissions as PoAScope["platform_permissions"],
       },
       subject: claims.sub,
       jti: claims.jti,
@@ -97,7 +98,16 @@ async function parseCredential(
   }
 
   if (credRef.poa_snapshot) {
-    return parseCredential({ ...credRef, poa_snapshot: credRef.poa_snapshot }, opts);
+    const snap = credRef.poa_snapshot as Record<string, unknown>;
+    const scope = (snap.scope ?? snap) as PoAScope;
+    return {
+      poa: scope,
+      subject: (snap.subject as string) ?? "",
+      mandateId: snap.mandate_id as string | undefined,
+      mandateStatus: snap.mandate_status as string | undefined,
+      approvalMode: (snap.approval_mode as string) ?? "supervised",
+      delegationChain: snap.delegation_chain as ParsedCredential["delegationChain"],
+    };
   }
 
   throw new GAuthTokenError("Cannot parse credential: no token or poa_snapshot provided", "CREDENTIAL_PARSE_ERROR");
@@ -223,13 +233,8 @@ export async function enforceAction(
     };
   } catch (err) {
     if (err instanceof GAuthTokenError) {
-      const errorCode = err.violationCode === "CREDENTIAL_EXPIRED"
-        ? PEP_ERROR_CODES.CREDENTIAL_PARSE_ERROR
-        : err.violationCode === "CREDENTIAL_PARSE_ERROR"
-          ? PEP_ERROR_CODES.CREDENTIAL_PARSE_ERROR
-          : PEP_ERROR_CODES.CREDENTIAL_PARSE_ERROR;
       return {
-        error_code: errorCode,
+        error_code: PEP_ERROR_CODES.CREDENTIAL_PARSE_ERROR,
         message: err.message,
         timestamp: new Date().toISOString(),
         request_id: request.request_id,

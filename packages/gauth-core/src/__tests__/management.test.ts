@@ -409,6 +409,211 @@ describe("ManagementAPI", () => {
       }
     });
 
+    it("rejects delegation with less restrictive governance_profile", async () => {
+      const result = await api.createDelegation({
+        parent_mandate_id: parentId,
+        delegate_agent_id: "agent-002",
+        scope_restriction: {
+          governance_profile: "minimal",
+        },
+        delegated_by: "admin@example.com",
+      });
+
+      expect(isManagementError(result)).toBe(true);
+      if (isManagementError(result)) {
+        expect(result.error_code).toBe("VALIDATION_FAILED");
+        expect(result.message).toContain("governance_profile");
+        expect(result.message).toContain("less restrictive");
+      }
+    });
+
+    it("rejects delegation with broader phase", async () => {
+      const result = await api.createDelegation({
+        parent_mandate_id: parentId,
+        delegate_agent_id: "agent-002",
+        scope_restriction: {
+          phase: "run",
+        },
+        delegated_by: "admin@example.com",
+      });
+
+      expect(isManagementError(result)).toBe(true);
+      if (isManagementError(result)) {
+        expect(result.error_code).toBe("VALIDATION_FAILED");
+        expect(result.message).toContain("phase");
+        expect(result.message).toContain("broader");
+      }
+    });
+
+    it("allows delegation with more restrictive governance_profile", async () => {
+      const result = await api.createDelegation({
+        parent_mandate_id: parentId,
+        delegate_agent_id: "agent-002",
+        scope_restriction: {
+          governance_profile: "behoerde",
+        },
+        delegated_by: "admin@example.com",
+      });
+
+      expect(isManagementError(result)).toBe(false);
+    });
+
+    it("allows delegation with narrower phase", async () => {
+      const result = await api.createDelegation({
+        parent_mandate_id: parentId,
+        delegate_agent_id: "agent-002",
+        scope_restriction: {
+          phase: "plan",
+        },
+        delegated_by: "admin@example.com",
+      });
+
+      expect(isManagementError(result)).toBe(false);
+    });
+
+    it("rejects delegation with platform_permission escalation (boolean false→true)", async () => {
+      const parentResult = await api.createMandate(makeCreateRequest({
+        scope: {
+          governance_profile: "enterprise",
+          phase: "build",
+          core_verbs: {
+            "foundry.file.create": { allowed: true },
+            "foundry.agent.delegate": { allowed: true, constraints: { max_delegation_depth: 2 } },
+          },
+          platform_permissions: { "database": { write: false, read: true } },
+        },
+        requirements: { approval_mode: "autonomous", budget: { total_cents: 50000 }, ttl_seconds: 3600 },
+      }));
+      if (isManagementError(parentResult)) return;
+      await api.activateMandate({ mandate_id: parentResult.mandate_id, activated_by: "admin@example.com" });
+
+      const result = await api.createDelegation({
+        parent_mandate_id: parentResult.mandate_id,
+        delegate_agent_id: "agent-002",
+        scope_restriction: {
+          platform_permissions: { "database": { write: true, read: true } },
+        },
+        delegated_by: "admin@example.com",
+      });
+
+      expect(isManagementError(result)).toBe(true);
+      if (isManagementError(result)) {
+        expect(result.message).toContain("escalates from false to true");
+      }
+    });
+
+    it("rejects delegation with platform_permission escalation (array superset)", async () => {
+      const parentResult = await api.createMandate(makeCreateRequest({
+        scope: {
+          governance_profile: "enterprise",
+          phase: "build",
+          core_verbs: {
+            "foundry.file.create": { allowed: true },
+            "foundry.agent.delegate": { allowed: true, constraints: { max_delegation_depth: 2 } },
+          },
+          platform_permissions: { "deploy": { targets: ["dev", "staging"] } },
+        },
+        requirements: { approval_mode: "autonomous", budget: { total_cents: 50000 }, ttl_seconds: 3600 },
+      }));
+      if (isManagementError(parentResult)) return;
+      await api.activateMandate({ mandate_id: parentResult.mandate_id, activated_by: "admin@example.com" });
+
+      const result = await api.createDelegation({
+        parent_mandate_id: parentResult.mandate_id,
+        delegate_agent_id: "agent-002",
+        scope_restriction: {
+          platform_permissions: { "deploy": { targets: ["dev", "staging", "prod"] } },
+        },
+        delegated_by: "admin@example.com",
+      });
+
+      expect(isManagementError(result)).toBe(true);
+      if (isManagementError(result)) {
+        expect(result.message).toContain("not in parent");
+      }
+    });
+
+    it("rejects delegation with platform_permission type mismatch (fail-closed)", async () => {
+      const parentResult = await api.createMandate(makeCreateRequest({
+        scope: {
+          governance_profile: "enterprise",
+          phase: "build",
+          core_verbs: {
+            "foundry.file.create": { allowed: true },
+            "foundry.agent.delegate": { allowed: true, constraints: { max_delegation_depth: 2 } },
+          },
+          platform_permissions: { "database": { write: false } },
+        },
+        requirements: { approval_mode: "autonomous", budget: { total_cents: 50000 }, ttl_seconds: 3600 },
+      }));
+      if (isManagementError(parentResult)) return;
+      await api.activateMandate({ mandate_id: parentResult.mandate_id, activated_by: "admin@example.com" });
+
+      const result = await api.createDelegation({
+        parent_mandate_id: parentResult.mandate_id,
+        delegate_agent_id: "agent-002",
+        scope_restriction: {
+          platform_permissions: { "database": { write: "yes" } } as any,
+        },
+        delegated_by: "admin@example.com",
+      });
+
+      expect(isManagementError(result)).toBe(true);
+      if (isManagementError(result)) {
+        expect(result.message).toContain("type mismatch");
+      }
+    });
+
+    it("rejects delegation with loosened verb constraints", async () => {
+      const result = await api.createDelegation({
+        parent_mandate_id: parentId,
+        delegate_agent_id: "agent-002",
+        scope_restriction: {
+          core_verbs: {
+            "foundry.agent.delegate": {
+              allowed: true,
+              constraints: { max_delegation_depth: 5 },
+            },
+          },
+        },
+        delegated_by: "admin@example.com",
+      });
+
+      expect(isManagementError(result)).toBe(true);
+      if (isManagementError(result)) {
+        expect(result.message).toContain("constraint");
+        expect(result.message).toContain("exceeds parent");
+      }
+    });
+
+    it("allows delegation with tighter platform_permissions", async () => {
+      const parentResult = await api.createMandate(makeCreateRequest({
+        scope: {
+          governance_profile: "enterprise",
+          phase: "build",
+          core_verbs: {
+            "foundry.file.create": { allowed: true },
+            "foundry.agent.delegate": { allowed: true, constraints: { max_delegation_depth: 2 } },
+          },
+          platform_permissions: { "database": { write: true, read: true } },
+        },
+        requirements: { approval_mode: "autonomous", budget: { total_cents: 50000 }, ttl_seconds: 3600 },
+      }));
+      if (isManagementError(parentResult)) return;
+      await api.activateMandate({ mandate_id: parentResult.mandate_id, activated_by: "admin@example.com" });
+
+      const result = await api.createDelegation({
+        parent_mandate_id: parentResult.mandate_id,
+        delegate_agent_id: "agent-002",
+        scope_restriction: {
+          platform_permissions: { "database": { write: false, read: true } },
+        },
+        delegated_by: "admin@example.com",
+      });
+
+      expect(isManagementError(result)).toBe(false);
+    });
+
     it("rejects delegation when not allowed", async () => {
       const noDelegateResult = await api.createMandate(makeCreateRequest());
       if (!isManagementError(noDelegateResult)) {

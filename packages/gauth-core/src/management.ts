@@ -74,6 +74,8 @@ export class ManagementAPI {
       phase: request.scope.phase,
       allowed_paths: request.scope.allowed_paths,
       denied_paths: request.scope.denied_paths,
+      allowed_regions: request.scope.allowed_regions,
+      allowed_sectors: request.scope.allowed_sectors,
       active_modules: request.scope.active_modules,
       tool_permissions_hash: toolPermissionsHash,
       platform_permissions_hash: platformPermissionsHash,
@@ -472,6 +474,181 @@ export class ManagementAPI {
     };
   }
 
+  private checkConstraintSubset(
+    parentConstraints: Record<string, unknown>,
+    childConstraints: Record<string, unknown>,
+    verb: string,
+  ): string | null {
+    for (const [key, childVal] of Object.entries(childConstraints)) {
+      const parentVal = parentConstraints[key];
+      if (parentVal === undefined) continue;
+
+      if (typeof childVal === "number" && typeof parentVal === "number") {
+        if (childVal > parentVal) {
+          return `verb '${verb}' constraint '${key}' exceeds parent (${childVal} > ${parentVal}).`;
+        }
+      } else if (typeof childVal === "boolean" && typeof parentVal === "boolean") {
+        if (childVal === true && parentVal === false) {
+          return `verb '${verb}' constraint '${key}' escalates from false to true.`;
+        }
+      } else if (Array.isArray(childVal) && Array.isArray(parentVal)) {
+        for (const item of childVal) {
+          if (!parentVal.includes(item)) {
+            return `verb '${verb}' constraint '${key}' contains '${item}' not in parent.`;
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  private checkPlatformPermSubset(
+    parentPerms: Record<string, unknown>,
+    childPerms: Record<string, unknown>,
+    path: string,
+  ): string | null {
+    for (const [key, childVal] of Object.entries(childPerms)) {
+      const fullKey = path ? `${path}.${key}` : key;
+      if (!(key in parentPerms)) {
+        return `platform_permission '${fullKey}' is not present in parent.`;
+      }
+      const parentVal = parentPerms[key];
+
+      if (typeof childVal !== typeof parentVal || Array.isArray(childVal) !== Array.isArray(parentVal)) {
+        return `platform_permission '${fullKey}' type mismatch with parent (fail-closed).`;
+      }
+
+      if (typeof childVal === "boolean" && typeof parentVal === "boolean") {
+        if (childVal === true && parentVal === false) {
+          return `platform_permission '${fullKey}' escalates from false to true.`;
+        }
+      } else if (typeof childVal === "number" && typeof parentVal === "number") {
+        if (childVal > parentVal) {
+          return `platform_permission '${fullKey}' exceeds parent value (${childVal} > ${parentVal}).`;
+        }
+      } else if (Array.isArray(childVal) && Array.isArray(parentVal)) {
+        for (const item of childVal) {
+          if (!parentVal.includes(item)) {
+            return `platform_permission '${fullKey}' contains '${item}' not in parent.`;
+          }
+        }
+      } else if (
+        typeof childVal === "object" && childVal !== null && !Array.isArray(childVal) &&
+        typeof parentVal === "object" && parentVal !== null && !Array.isArray(parentVal)
+      ) {
+        const nested = this.checkPlatformPermSubset(
+          parentVal as Record<string, unknown>,
+          childVal as Record<string, unknown>,
+          fullKey,
+        );
+        if (nested) return nested;
+      }
+    }
+    return null;
+  }
+
+  private validateDelegationSubset(
+    parent: MandateDetail,
+    request: DelegationRequest,
+  ): ManagementError | null {
+    const restriction = request.scope_restriction;
+    const makeError = (msg: string): ManagementError => ({
+      error_code: MGMT_ERROR_CODES.VALIDATION_FAILED,
+      message: `Delegation scope escalation: ${msg}`,
+      timestamp: new Date().toISOString(),
+      mandate_id: request.parent_mandate_id,
+    });
+
+    const GOVERNANCE_STRICTNESS: Record<string, number> = {
+      minimal: 0,
+      standard: 1,
+      strict: 2,
+      enterprise: 3,
+      behoerde: 4,
+    };
+
+    if (restriction.governance_profile) {
+      const parentLevel = GOVERNANCE_STRICTNESS[parent.scope.governance_profile] ?? 0;
+      const childLevel = GOVERNANCE_STRICTNESS[restriction.governance_profile] ?? 0;
+      if (childLevel < parentLevel) {
+        return makeError(
+          `governance_profile '${restriction.governance_profile}' is less restrictive than parent '${parent.scope.governance_profile}'.`,
+        );
+      }
+    }
+
+    const PHASE_BREADTH: Record<string, number> = { plan: 0, build: 1, run: 2 };
+    if (restriction.phase) {
+      const parentBreadth = PHASE_BREADTH[parent.scope.phase] ?? 0;
+      const childBreadth = PHASE_BREADTH[restriction.phase] ?? 0;
+      if (childBreadth > parentBreadth) {
+        return makeError(
+          `phase '${restriction.phase}' is broader than parent phase '${parent.scope.phase}'.`,
+        );
+      }
+    }
+
+    if (restriction.core_verbs) {
+      for (const [verb, policy] of Object.entries(restriction.core_verbs)) {
+        const parentPolicy = parent.scope.core_verbs[verb];
+        if (!parentPolicy || !parentPolicy.allowed) {
+          return makeError(`verb '${verb}' is not allowed in parent mandate.`);
+        }
+        if (policy.allowed && !parentPolicy.allowed) {
+          return makeError(`verb '${verb}' cannot be enabled when disabled in parent.`);
+        }
+        if (policy.constraints && parentPolicy.constraints) {
+          const constraintCheck = this.checkConstraintSubset(
+            parentPolicy.constraints as Record<string, unknown>,
+            policy.constraints as Record<string, unknown>,
+            verb,
+          );
+          if (constraintCheck) return makeError(constraintCheck);
+        }
+      }
+    }
+
+    if (restriction.allowed_paths && parent.scope.allowed_paths) {
+      for (const childPath of restriction.allowed_paths) {
+        const isSubset = parent.scope.allowed_paths.some(
+          (pp) => childPath === pp || childPath.startsWith(pp.endsWith("/") ? pp : pp + "/"),
+        );
+        if (!isSubset) {
+          return makeError(`allowed_path '${childPath}' is not a subset of parent allowed_paths.`);
+        }
+      }
+    }
+
+    if (restriction.allowed_regions && parent.scope.allowed_regions) {
+      for (const region of restriction.allowed_regions) {
+        if (!parent.scope.allowed_regions.includes(region)) {
+          return makeError(`region '${region}' is not in parent allowed_regions.`);
+        }
+      }
+    }
+
+    if (restriction.allowed_sectors && parent.scope.allowed_sectors) {
+      for (const sector of restriction.allowed_sectors) {
+        if (!parent.scope.allowed_sectors.includes(sector)) {
+          return makeError(`sector '${sector}' is not in parent allowed_sectors.`);
+        }
+      }
+    }
+
+    if (restriction.platform_permissions && parent.scope.platform_permissions) {
+      const escalation = this.checkPlatformPermSubset(
+        parent.scope.platform_permissions as Record<string, unknown>,
+        restriction.platform_permissions as Record<string, unknown>,
+        "",
+      );
+      if (escalation) {
+        return makeError(escalation);
+      }
+    }
+
+    return null;
+  }
+
   async createDelegation(request: DelegationRequest): Promise<DelegationResponse | ManagementError> {
     const parent = await this.store.get(request.parent_mandate_id);
     if (!parent) return this.notFound(request.parent_mandate_id);
@@ -518,19 +695,13 @@ export class ManagementAPI {
     const childId = `mdt_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
     const now = new Date().toISOString();
 
+    const escalationError = this.validateDelegationSubset(parent, request);
+    if (escalationError) return escalationError;
+
     const childVerbs: Record<string, import("./types.js").ToolPolicy> = {};
     const restrictionVerbs = request.scope_restriction.core_verbs;
     if (restrictionVerbs) {
       for (const [verb, policy] of Object.entries(restrictionVerbs)) {
-        const parentPolicy = parent.scope.core_verbs[verb];
-        if (!parentPolicy || !parentPolicy.allowed) {
-          return {
-            error_code: MGMT_ERROR_CODES.VALIDATION_FAILED,
-            message: `Delegation scope escalation: verb '${verb}' is not allowed in parent mandate.`,
-            timestamp: new Date().toISOString(),
-            mandate_id: request.parent_mandate_id,
-          };
-        }
         childVerbs[verb] = policy;
       }
     } else {
@@ -557,6 +728,8 @@ export class ManagementAPI {
       phase: childScope.phase,
       allowed_paths: childScope.allowed_paths,
       denied_paths: childScope.denied_paths,
+      allowed_regions: childScope.allowed_regions,
+      allowed_sectors: childScope.allowed_sectors,
       active_modules: childScope.active_modules,
       tool_permissions_hash: await computeToolPermissionsHash(childScope.core_verbs),
       platform_permissions_hash: await computePlatformPermissionsHash(

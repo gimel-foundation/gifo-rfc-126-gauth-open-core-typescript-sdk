@@ -43,6 +43,8 @@ export async function createExtendedToken(
     phase: poa.scope.phase,
     allowed_paths: poa.scope.allowed_paths,
     denied_paths: poa.scope.denied_paths,
+    allowed_regions: poa.scope.allowed_regions,
+    allowed_sectors: poa.scope.allowed_sectors,
     active_modules: poa.scope.active_modules,
     tool_permissions_hash: toolPermissionsHash,
     platform_permissions_hash: platformPermissionsHash,
@@ -62,6 +64,15 @@ export async function createExtendedToken(
       phase: poa.scope.phase,
       allowed_paths: poa.scope.allowed_paths,
       denied_paths: poa.scope.denied_paths,
+      allowed_regions: poa.scope.allowed_regions,
+      allowed_sectors: poa.scope.allowed_sectors,
+      core_verbs: Object.fromEntries(
+        Object.entries(poa.scope.core_verbs).map(([k, v]) => [
+          k,
+          { allowed: v.allowed, cost_cents_base: v.cost_cents_base, constraints: v.constraints as Record<string, unknown> | undefined },
+        ]),
+      ),
+      platform_permissions: poa.scope.platform_permissions as Record<string, unknown> | undefined,
     },
     scope_checksum: scopeChecksum,
     tool_permissions_hash: toolPermissionsHash,
@@ -174,6 +185,51 @@ export async function validateExtendedToken(
   if (payload.gauth.version !== SCHEMA_VERSION) {
     throw new GAuthTokenError(
       `Unsupported schema version: ${payload.gauth.version}. Expected ${SCHEMA_VERSION}.`,
+      "CREDENTIAL_INVALID",
+    );
+  }
+
+  if (!payload.gauth.scope_checksum || !payload.gauth.tool_permissions_hash || !payload.gauth.platform_permissions_hash) {
+    throw new GAuthTokenError(
+      "Token missing required integrity fields (scope_checksum, tool_permissions_hash, platform_permissions_hash).",
+      "CREDENTIAL_INVALID",
+    );
+  }
+
+  const recomputedToolHash = await computeToolPermissionsHash(
+    payload.gauth.scope.core_verbs as Record<string, unknown>,
+  );
+  if (recomputedToolHash !== payload.gauth.tool_permissions_hash) {
+    throw new GAuthTokenError(
+      "Token tool_permissions_hash verification failed: scope integrity compromised.",
+      "CREDENTIAL_INVALID",
+    );
+  }
+
+  const recomputedPlatformHash = await computePlatformPermissionsHash(
+    payload.gauth.scope.platform_permissions as Record<string, unknown> | undefined,
+  );
+  if (recomputedPlatformHash !== payload.gauth.platform_permissions_hash) {
+    throw new GAuthTokenError(
+      "Token platform_permissions_hash verification failed: scope integrity compromised.",
+      "CREDENTIAL_INVALID",
+    );
+  }
+
+  const recomputedChecksum = await computeScopeChecksum({
+    governance_profile: payload.gauth.scope.governance_profile,
+    phase: payload.gauth.scope.phase,
+    allowed_paths: payload.gauth.scope.allowed_paths ?? [],
+    denied_paths: payload.gauth.scope.denied_paths ?? [],
+    allowed_regions: payload.gauth.scope.allowed_regions ?? [],
+    allowed_sectors: payload.gauth.scope.allowed_sectors ?? [],
+    active_modules: payload.gauth.scope.active_modules ?? [],
+    tool_permissions_hash: recomputedToolHash,
+    platform_permissions_hash: recomputedPlatformHash,
+  });
+  if (recomputedChecksum !== payload.gauth.scope_checksum) {
+    throw new GAuthTokenError(
+      "Token scope_checksum verification failed: scope integrity compromised.",
       "CREDENTIAL_INVALID",
     );
   }

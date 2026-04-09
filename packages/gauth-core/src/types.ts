@@ -704,6 +704,10 @@ export interface GAuthJWTClaims {
       phase: Phase;
       allowed_paths?: string[];
       denied_paths?: string[];
+      allowed_regions?: string[];
+      allowed_sectors?: string[];
+      core_verbs: Record<string, { allowed: boolean; cost_cents_base?: number; constraints?: Record<string, unknown> }>;
+      platform_permissions?: Record<string, unknown>;
     };
     scope_checksum: string;
     tool_permissions_hash: string;
