@@ -291,6 +291,41 @@ describe("PEP batchEnforce", () => {
   });
 });
 
+describe("CHK-13 Budget via poa_snapshot", () => {
+  it("enforces budget from poa_snapshot requirements", async () => {
+    const poa = makePoa({
+      requirements: {
+        ...makePoa().requirements,
+        budget: { total_cents: 100, remaining_cents: 0 },
+      },
+    });
+    const req = makeRequest({
+      credential: { format: "jwt", poa_snapshot: poa },
+    });
+
+    const result = await enforceAction(req, {}) as EnforcementDecision;
+    expect(result.decision).toBe("DENY");
+    const chk13 = result.checks.find((c) => c.check_id === "CHK-13");
+    expect(chk13?.result).toBe("fail");
+  });
+
+  it("passes budget check when budget has remaining funds", async () => {
+    const poa = makePoa({
+      requirements: {
+        ...makePoa().requirements,
+        budget: { total_cents: 10000, remaining_cents: 5000 },
+      },
+    });
+    const req = makeRequest({
+      credential: { format: "jwt", poa_snapshot: poa },
+    });
+
+    const result = await enforceAction(req, {}) as EnforcementDecision;
+    const chk13 = result.checks.find((c) => c.check_id === "CHK-13");
+    expect(chk13?.result).toBe("pass");
+  });
+});
+
 describe("CHK-11 Transaction Type", () => {
   it("blocks restricted transaction types under governance profile", async () => {
     const poa = makePoa({ scope: { ...makePoa().scope, governance_profile: "enterprise" } });

@@ -243,6 +243,33 @@ export async function handleMgmtRequest(
     return { status: 200, body: result, headers: MGMT_RESPONSE_HEADERS };
   }
 
+  if (path.match(/^\/gauth\/mgmt\/v1\/mandates\/[^/]+\/delegate$/) && req.method === "POST") {
+    const mandateId = path.split("/").slice(-2)[0];
+    const body = req.body as Record<string, unknown>;
+    const result = await api.createDelegation({
+      parent_mandate_id: mandateId,
+      delegate_agent_id: body.delegate_agent_id as string,
+      scope_restriction: (body.scope_restriction ?? {}) as Parameters<ManagementAPI["createDelegation"]>[0]["scope_restriction"],
+      delegated_by: body.delegated_by as string,
+      max_depth: body.max_depth as number | undefined,
+    });
+    if ("error_code" in result) {
+      return { status: 422, body: result, headers: MGMT_RESPONSE_HEADERS };
+    }
+    return { status: 201, body: result, headers: MGMT_RESPONSE_HEADERS };
+  }
+
+  if (path.match(/^\/gauth\/mgmt\/v1\/mandates\/[^/]+\/governance-profile$/) && req.method === "PUT") {
+    const mandateId = path.split("/").slice(-2)[0];
+    const body = req.body as Record<string, string>;
+    const result = await api.updateGovernanceProfile(mandateId, body.governance_profile as Parameters<ManagementAPI["updateGovernanceProfile"]>[1], body.updated_by);
+    if ("error_code" in result) {
+      const status = (result as { error_code: string }).error_code === "MANDATE_NOT_FOUND" ? 404 : 409;
+      return { status, body: result, headers: MGMT_RESPONSE_HEADERS };
+    }
+    return { status: 200, body: result, headers: MGMT_RESPONSE_HEADERS };
+  }
+
   return {
     status: 404,
     body: { error: "Not found", path: req.path },

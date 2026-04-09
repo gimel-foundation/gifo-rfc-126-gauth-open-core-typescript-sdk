@@ -106,6 +106,10 @@ async function parseCredential(
     const requirements = snap.requirements as Record<string, unknown> | undefined;
     const subject = (parties?.subject as string) ?? (snap.subject as string) ?? "";
     const approvalMode = (requirements?.approval_mode as string) ?? (snap.approval_mode as string) ?? "supervised";
+
+    const budgetObj = (requirements?.budget ?? snap.budget) as Record<string, unknown> | undefined;
+    const sessionObj = (requirements?.session_limits ?? snap.session_limits) as Record<string, unknown> | undefined;
+
     return {
       poa: scope,
       subject,
@@ -113,6 +117,20 @@ async function parseCredential(
       mandateStatus: snap.mandate_status as string | undefined,
       approvalMode,
       delegationChain: snap.delegation_chain as ParsedCredential["delegationChain"],
+      budget: budgetObj
+        ? {
+            total_cents: (budgetObj.total_cents as number) ?? 0,
+            remaining_cents: (budgetObj.remaining_cents as number) ?? (budgetObj.total_cents as number) ?? 0,
+          }
+        : undefined,
+      session: sessionObj
+        ? {
+            session_id: sessionObj.session_id as string | undefined,
+            remaining_tool_calls: sessionObj.remaining_tool_calls as number | undefined,
+            max_lines_per_commit: sessionObj.max_lines_per_commit as number | undefined,
+            started_at: sessionObj.started_at as string | undefined,
+          }
+        : undefined,
     };
   }
 
