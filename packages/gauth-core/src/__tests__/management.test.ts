@@ -1,0 +1,461 @@
+import { describe, it, expect, beforeEach } from "vitest";
+import { ManagementAPI, InMemoryMandateStore, isManagementError } from "../management.js";
+import type { MandateCreationRequest, ManagementError, MandateDetail } from "../types.js";
+
+function makeCreateRequest(overrides?: Partial<MandateCreationRequest>): MandateCreationRequest {
+  return {
+    parties: {
+      subject: "agent-001",
+      customer_id: "cust-123",
+      project_id: "proj-456",
+      issued_by: "admin@example.com",
+    },
+    scope: {
+      governance_profile: "standard",
+      phase: "build",
+      core_verbs: {
+        "foundry.file.create": { allowed: true },
+        "foundry.file.modify": { allowed: true },
+      },
+    },
+    requirements: {
+      approval_mode: "autonomous",
+      budget: { total_cents: 5000 },
+      ttl_seconds: 3600,
+    },
+    ...overrides,
+  } as MandateCreationRequest;
+}
+
+describe("ManagementAPI", () => {
+  let api: ManagementAPI;
+  let store: InMemoryMandateStore;
+
+  beforeEach(() => {
+    store = new InMemoryMandateStore();
+    api = new ManagementAPI(store);
+  });
+
+  describe("createMandate", () => {
+    it("creates a DRAFT mandate", async () => {
+      const result = await api.createMandate(makeCreateRequest());
+
+      expect(isManagementError(result)).toBe(false);
+      if (!isManagementError(result)) {
+        expect(result.status).toBe("DRAFT");
+        expect(result.mandate_id).toMatch(/^mdt_/);
+        expect(result.scope_checksum).toMatch(/^sha256:/);
+        expect(result.validation.accepted).toBe(true);
+      }
+    });
+
+    it("rejects missing required fields", async () => {
+      const result = await api.createMandate({
+        parties: {} as MandateCreationRequest["parties"],
+        scope: {} as MandateCreationRequest["scope"],
+        requirements: {} as MandateCreationRequest["requirements"],
+      } as MandateCreationRequest);
+
+      expect(isManagementError(result)).toBe(true);
+      if (isManagementError(result)) {
+        expect(result.error_code).toBe("VALIDATION_FAILED");
+      }
+    });
+
+    it("rejects ceiling violations", async () => {
+      const result = await api.createMandate(makeCreateRequest({
+        requirements: {
+          approval_mode: "autonomous",
+          budget: { total_cents: 999999 },
+          ttl_seconds: 3600,
+        },
+      }));
+
+      expect(isManagementError(result)).toBe(true);
+      if (isManagementError(result)) {
+        expect(result.error_code).toBe("VALIDATION_FAILED");
+      }
+    });
+
+    it("rejects four-eyes without approval chain", async () => {
+      const result = await api.createMandate(makeCreateRequest({
+        requirements: {
+          approval_mode: "four-eyes",
+          budget: { total_cents: 5000 },
+          ttl_seconds: 3600,
+        },
+      }));
+
+      expect(isManagementError(result)).toBe(true);
+    });
+  });
+
+  describe("mandate lifecycle", () => {
+    let mandateId: string;
+
+    beforeEach(async () => {
+      const result = await api.createMandate(makeCreateRequest());
+      if (!isManagementError(result)) {
+        mandateId = result.mandate_id;
+      }
+    });
+
+    it("activates a DRAFT mandate", async () => {
+      const result = await api.activateMandate({ mandate_id: mandateId, activated_by: "admin@example.com" });
+
+      expect(isManagementError(result)).toBe(false);
+      if (!isManagementError(result)) {
+        expect(result.status).toBe("ACTIVE");
+        expect(result.expires_at).toBeDefined();
+      }
+    });
+
+    it("rejects activating non-DRAFT mandate", async () => {
+      await api.activateMandate({ mandate_id: mandateId, activated_by: "admin@example.com" });
+      const result = await api.activateMandate({ mandate_id: mandateId, activated_by: "admin@example.com" });
+
+      expect(isManagementError(result)).toBe(true);
+      if (isManagementError(result)) {
+        expect(result.error_code).toBe("INVALID_STATE_TRANSITION");
+      }
+    });
+
+    it("suspends an ACTIVE mandate", async () => {
+      await api.activateMandate({ mandate_id: mandateId, activated_by: "admin@example.com" });
+      const result = await api.suspendMandate({
+        mandate_id: mandateId,
+        suspended_by: "admin@example.com",
+        reason: "investigation",
+      });
+
+      expect(isManagementError(result)).toBe(false);
+      if (!isManagementError(result)) {
+        expect(result.status).toBe("SUSPENDED");
+      }
+    });
+
+    it("resumes a SUSPENDED mandate", async () => {
+      await api.activateMandate({ mandate_id: mandateId, activated_by: "admin@example.com" });
+      await api.suspendMandate({ mandate_id: mandateId, suspended_by: "admin@example.com", reason: "test" });
+      const result = await api.resumeMandate({
+        mandate_id: mandateId,
+        resumed_by: "admin@example.com",
+      });
+
+      expect(isManagementError(result)).toBe(false);
+      if (!isManagementError(result)) {
+        expect(result.status).toBe("ACTIVE");
+        expect(result.remaining_ttl_seconds).toBeGreaterThan(0);
+      }
+    });
+
+    it("revokes an ACTIVE mandate", async () => {
+      await api.activateMandate({ mandate_id: mandateId, activated_by: "admin@example.com" });
+      const result = await api.revokeMandate({
+        mandate_id: mandateId,
+        revoked_by: "admin@example.com",
+        reason: "misuse detected",
+      });
+
+      expect(isManagementError(result)).toBe(false);
+      if (!isManagementError(result)) {
+        expect(result.status).toBe("REVOKED");
+        expect(result.reason).toBe("misuse detected");
+      }
+    });
+
+    it("cannot revoke a DRAFT mandate", async () => {
+      const result = await api.revokeMandate({
+        mandate_id: mandateId,
+        revoked_by: "admin@example.com",
+        reason: "test",
+      });
+
+      expect(isManagementError(result)).toBe(true);
+      if (isManagementError(result)) {
+        expect(result.error_code).toBe("INVALID_STATE_TRANSITION");
+      }
+    });
+
+    it("cannot resume a non-SUSPENDED mandate", async () => {
+      await api.activateMandate({ mandate_id: mandateId, activated_by: "admin@example.com" });
+      const result = await api.resumeMandate({ mandate_id: mandateId, resumed_by: "admin@example.com" });
+
+      expect(isManagementError(result)).toBe(true);
+    });
+
+    it("supersedes existing active mandate on activation", async () => {
+      await api.activateMandate({ mandate_id: mandateId, activated_by: "admin@example.com" });
+
+      const result2 = await api.createMandate(makeCreateRequest());
+      if (!isManagementError(result2)) {
+        const activation = await api.activateMandate({ mandate_id: result2.mandate_id, activated_by: "admin@example.com" });
+        if (!isManagementError(activation)) {
+          expect(activation.superseded_mandate_id).toBe(mandateId);
+        }
+      }
+    });
+  });
+
+  describe("budget operations", () => {
+    let mandateId: string;
+
+    beforeEach(async () => {
+      const result = await api.createMandate(makeCreateRequest());
+      if (!isManagementError(result)) {
+        mandateId = result.mandate_id;
+        await api.activateMandate({ mandate_id: mandateId, activated_by: "admin@example.com" });
+      }
+    });
+
+    it("tops up budget", async () => {
+      const result = await api.topUpBudget({
+        mandate_id: mandateId,
+        additional_cents: 2000,
+        performed_by: "admin@example.com",
+      });
+
+      expect(isManagementError(result)).toBe(false);
+      if (!isManagementError(result)) {
+        expect(result.previous_total_cents).toBe(5000);
+        expect(result.new_total_cents).toBe(7000);
+        expect(result.remaining_cents).toBe(7000);
+      }
+    });
+
+    it("rejects budget top-up exceeding governance ceiling", async () => {
+      const result = await api.topUpBudget({
+        mandate_id: mandateId,
+        additional_cents: 999999,
+        performed_by: "admin@example.com",
+      });
+
+      expect(isManagementError(result)).toBe(true);
+      if (isManagementError(result)) {
+        expect(result.error_code).toBe("CEILING_VIOLATION");
+      }
+    });
+
+    it("rejects negative top-up", async () => {
+      const result = await api.topUpBudget({
+        mandate_id: mandateId,
+        additional_cents: -100,
+        performed_by: "admin@example.com",
+      });
+
+      expect(isManagementError(result)).toBe(true);
+      if (isManagementError(result)) {
+        expect(result.error_code).toBe("BUDGET_DECREASE_DENIED");
+      }
+    });
+
+    it("tracks budget consumption", async () => {
+      await api.reportConsumption({
+        mandate_id: mandateId,
+        amount_cents: 4500,
+        action_verb: "foundry.command.run",
+        action_resource: "npm test",
+        timestamp: new Date().toISOString(),
+      });
+
+      const mandate = await api.getMandate(mandateId);
+      if (!isManagementError(mandate)) {
+        expect(mandate.budget_consumed_cents).toBe(4500);
+        expect(mandate.requirements.budget?.remaining_cents).toBe(500);
+      }
+    });
+
+    it("transitions to BUDGET_EXCEEDED when budget exhausted", async () => {
+      await api.reportConsumption({
+        mandate_id: mandateId,
+        amount_cents: 5001,
+        action_verb: "foundry.command.run",
+        action_resource: "npm test",
+        timestamp: new Date().toISOString(),
+      });
+
+      const mandate = await api.getMandate(mandateId);
+      if (!isManagementError(mandate)) {
+        expect(mandate.status).toBe("BUDGET_EXCEEDED");
+      }
+    });
+  });
+
+  describe("TTL extension", () => {
+    let mandateId: string;
+
+    beforeEach(async () => {
+      const result = await api.createMandate(makeCreateRequest());
+      if (!isManagementError(result)) {
+        mandateId = result.mandate_id;
+        await api.activateMandate({ mandate_id: mandateId, activated_by: "admin@example.com" });
+      }
+    });
+
+    it("extends TTL", async () => {
+      const result = await api.extendTTL({
+        mandate_id: mandateId,
+        additional_seconds: 1800,
+        performed_by: "admin@example.com",
+      });
+
+      expect(isManagementError(result)).toBe(false);
+      if (!isManagementError(result)) {
+        expect(result.new_ttl_seconds).toBe(5400);
+      }
+    });
+
+    it("rejects TTL extension exceeding governance ceiling", async () => {
+      const result = await api.extendTTL({
+        mandate_id: mandateId,
+        additional_seconds: 999999,
+        performed_by: "admin@example.com",
+      });
+
+      expect(isManagementError(result)).toBe(true);
+      if (isManagementError(result)) {
+        expect(result.error_code).toBe("CEILING_VIOLATION");
+      }
+    });
+
+    it("rejects negative TTL extension", async () => {
+      const result = await api.extendTTL({
+        mandate_id: mandateId,
+        additional_seconds: -600,
+        performed_by: "admin@example.com",
+      });
+
+      expect(isManagementError(result)).toBe(true);
+      if (isManagementError(result)) {
+        expect(result.error_code).toBe("TTL_DECREASE_DENIED");
+      }
+    });
+  });
+
+  describe("delegation", () => {
+    let parentId: string;
+
+    beforeEach(async () => {
+      const result = await api.createMandate(makeCreateRequest({
+        scope: {
+          governance_profile: "enterprise",
+          phase: "build",
+          core_verbs: {
+            "foundry.file.create": { allowed: true },
+            "foundry.agent.delegate": {
+              allowed: true,
+              constraints: { max_delegation_depth: 2 },
+            },
+          },
+        },
+        requirements: {
+          approval_mode: "autonomous",
+          budget: { total_cents: 50000 },
+          ttl_seconds: 3600,
+        },
+      }));
+      if (!isManagementError(result)) {
+        parentId = result.mandate_id;
+        await api.activateMandate({ mandate_id: parentId, activated_by: "admin@example.com" });
+      }
+    });
+
+    it("creates child mandate via delegation", async () => {
+      const result = await api.createDelegation({
+        parent_mandate_id: parentId,
+        delegate_agent_id: "agent-002",
+        scope_restriction: {},
+        delegated_by: "admin@example.com",
+      });
+
+      expect(isManagementError(result)).toBe(false);
+      if (!isManagementError(result)) {
+        expect(result.status).toBe("DRAFT");
+        expect(result.delegation_depth).toBe(1);
+        expect(result.parent_mandate_id).toBe(parentId);
+      }
+    });
+
+    it("rejects delegation scope escalation (adding verbs not in parent)", async () => {
+      const result = await api.createDelegation({
+        parent_mandate_id: parentId,
+        delegate_agent_id: "agent-002",
+        scope_restriction: {
+          core_verbs: {
+            "foundry.file.delete": { allowed: true },
+          },
+        },
+        delegated_by: "admin@example.com",
+      });
+
+      expect(isManagementError(result)).toBe(true);
+      if (isManagementError(result)) {
+        expect(result.error_code).toBe("VALIDATION_FAILED");
+        expect(result.message).toContain("escalation");
+      }
+    });
+
+    it("rejects delegation by unauthorized user", async () => {
+      const result = await api.createDelegation({
+        parent_mandate_id: parentId,
+        delegate_agent_id: "agent-002",
+        scope_restriction: {},
+        delegated_by: "random-user@example.com",
+      });
+
+      expect(isManagementError(result)).toBe(true);
+      if (isManagementError(result)) {
+        expect(result.error_code).toBe("INSUFFICIENT_AUTHORITY");
+      }
+    });
+
+    it("rejects delegation when not allowed", async () => {
+      const noDelegateResult = await api.createMandate(makeCreateRequest());
+      if (!isManagementError(noDelegateResult)) {
+        await api.activateMandate({ mandate_id: noDelegateResult.mandate_id, activated_by: "admin@example.com" });
+        const result = await api.createDelegation({
+          parent_mandate_id: noDelegateResult.mandate_id,
+          delegate_agent_id: "agent-002",
+          scope_restriction: {},
+          delegated_by: "admin@example.com",
+        });
+        expect(isManagementError(result)).toBe(true);
+      }
+    });
+  });
+
+  describe("query", () => {
+    it("queries mandates by customer_id", async () => {
+      await api.createMandate(makeCreateRequest());
+      await api.createMandate(makeCreateRequest({ parties: { subject: "agent-002", customer_id: "cust-123", project_id: "proj-789", issued_by: "admin@example.com" } }));
+
+      const result = await api.queryMandates({ customer_id: "cust-123" });
+      expect(result.mandates.length).toBe(2);
+      expect(result.total).toBe(2);
+    });
+
+    it("queries mandates by status", async () => {
+      const r = await api.createMandate(makeCreateRequest());
+      if (!isManagementError(r)) {
+        await api.activateMandate({ mandate_id: r.mandate_id, activated_by: "admin@example.com" });
+      }
+      await api.createMandate(makeCreateRequest({ parties: { subject: "agent-002", customer_id: "cust-123", project_id: "proj-789", issued_by: "admin@example.com" } }));
+
+      const active = await api.queryMandates({ status: ["ACTIVE"] });
+      expect(active.mandates.length).toBe(1);
+
+      const draft = await api.queryMandates({ status: ["DRAFT"] });
+      expect(draft.mandates.length).toBe(1);
+    });
+  });
+});
+
+describe("isManagementError", () => {
+  it("detects error objects", () => {
+    expect(isManagementError({ error_code: "MANDATE_NOT_FOUND", message: "x", timestamp: "y" })).toBe(true);
+  });
+
+  it("rejects non-error objects", () => {
+    expect(isManagementError({ mandate_id: "mdt_abc" })).toBe(false);
+  });
+});
