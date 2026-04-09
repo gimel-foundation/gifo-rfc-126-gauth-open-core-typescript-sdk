@@ -629,6 +629,49 @@ describe("ManagementAPI", () => {
     });
   });
 
+  describe("governance profile", () => {
+    it("updates governance profile on DRAFT mandate (tightening)", async () => {
+      const createResult = await api.createMandate(makeCreateRequest({
+        scope: { governance_profile: "standard", phase: "build", core_verbs: { "foundry.file.create": { allowed: true } } },
+        requirements: { approval_mode: "autonomous", budget: { total_cents: 5000 }, ttl_seconds: 3600 },
+      }));
+      if (isManagementError(createResult)) return;
+
+      const result = await api.updateGovernanceProfile(createResult.mandate_id, "enterprise", "admin@example.com");
+      expect(isManagementError(result)).toBe(false);
+      if (!isManagementError(result)) {
+        expect(result.previous_profile).toBe("standard");
+        expect(result.new_profile).toBe("enterprise");
+      }
+    });
+
+    it("rejects governance profile relaxation", async () => {
+      const createResult = await api.createMandate(makeCreateRequest({
+        scope: { governance_profile: "enterprise", phase: "build", core_verbs: { "foundry.file.create": { allowed: true } } },
+        requirements: { approval_mode: "autonomous", budget: { total_cents: 5000 }, ttl_seconds: 3600 },
+      }));
+      if (isManagementError(createResult)) return;
+
+      const result = await api.updateGovernanceProfile(createResult.mandate_id, "minimal", "admin@example.com");
+      expect(isManagementError(result)).toBe(true);
+      if (isManagementError(result)) {
+        expect(result.message).toContain("relax");
+      }
+    });
+
+    it("rejects governance profile update on non-DRAFT mandate", async () => {
+      const createResult = await api.createMandate(makeCreateRequest());
+      if (isManagementError(createResult)) return;
+      await api.activateMandate({ mandate_id: createResult.mandate_id, activated_by: "admin@example.com" });
+
+      const result = await api.updateGovernanceProfile(createResult.mandate_id, "enterprise", "admin@example.com");
+      expect(isManagementError(result)).toBe(true);
+      if (isManagementError(result)) {
+        expect(result.message).toContain("DRAFT");
+      }
+    });
+  });
+
   describe("query", () => {
     it("queries mandates by customer_id", async () => {
       await api.createMandate(makeCreateRequest());

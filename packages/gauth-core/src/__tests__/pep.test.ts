@@ -291,6 +291,161 @@ describe("PEP batchEnforce", () => {
   });
 });
 
+describe("CHK-11 Transaction Type", () => {
+  it("blocks restricted transaction types under governance profile", async () => {
+    const poa = makePoa({ scope: { ...makePoa().scope, governance_profile: "enterprise" } });
+    const req = makeRequest({
+      action: { verb: "foundry.file.delete", resource: "src/data.ts", transaction_type: "irreversible_delete" },
+      credential: { format: "jwt", poa_snapshot: poa },
+    });
+
+    const result = await enforceAction(req, {}) as EnforcementDecision;
+    expect(result.decision).toBe("DENY");
+    const chk11 = result.checks.find((c) => c.check_id === "CHK-11");
+    expect(chk11?.result).toBe("fail");
+  });
+
+  it("allows non-restricted transaction types", async () => {
+    const poa = makePoa({ scope: { ...makePoa().scope, governance_profile: "minimal" } });
+    const req = makeRequest({
+      action: { verb: "foundry.file.create", resource: "src/index.ts", transaction_type: "irreversible_delete" },
+      credential: { format: "jwt", poa_snapshot: poa },
+    });
+
+    const result = await enforceAction(req, {}) as EnforcementDecision;
+    const chk11 = result.checks.find((c) => c.check_id === "CHK-11");
+    expect(chk11?.result).toBe("pass");
+  });
+});
+
+describe("CHK-12 Decision Type", () => {
+  it("blocks restricted decision types under governance profile", async () => {
+    const poa = makePoa({ scope: { ...makePoa().scope, governance_profile: "strict" } });
+    const req = makeRequest({
+      action: { verb: "foundry.file.create", resource: "src/index.ts", decision_type: "autonomous_deployment" },
+      credential: { format: "jwt", poa_snapshot: poa },
+    });
+
+    const result = await enforceAction(req, {}) as EnforcementDecision;
+    expect(result.decision).toBe("DENY");
+    const chk12 = result.checks.find((c) => c.check_id === "CHK-12");
+    expect(chk12?.result).toBe("fail");
+  });
+});
+
+describe("CHK-15 Approval", () => {
+  it("denies supervised mode without approval evidence", async () => {
+    const poa = makePoa({ requirements: { ...makePoa().requirements, approval_mode: "supervised" } });
+    const req = makeRequest({
+      credential: { format: "jwt", poa_snapshot: poa },
+    });
+
+    const result = await enforceAction(req, {}) as EnforcementDecision;
+    expect(result.decision).toBe("DENY");
+    const chk15 = result.checks.find((c) => c.check_id === "CHK-15");
+    expect(chk15?.result).toBe("fail");
+  });
+
+  it("permits supervised mode with approval evidence", async () => {
+    const poa = makePoa({ requirements: { ...makePoa().requirements, approval_mode: "supervised" } });
+    const req = makeRequest({
+      credential: { format: "jwt", poa_snapshot: poa },
+      context: {
+        approval_evidence: {
+          approver_id: "admin@example.com",
+          approved_at: new Date().toISOString(),
+        },
+      },
+    });
+
+    const result = await enforceAction(req, {}) as EnforcementDecision;
+    const chk15 = result.checks.find((c) => c.check_id === "CHK-15");
+    expect(chk15?.result).toBe("pass");
+  });
+
+  it("denies four-eyes when approver is the acting subject", async () => {
+    const poa = makePoa({ requirements: { ...makePoa().requirements, approval_mode: "four-eyes" } });
+    const req = makeRequest({
+      credential: { format: "jwt", poa_snapshot: poa },
+      context: {
+        approval_evidence: {
+          approver_id: "agent-001",
+          approved_at: new Date().toISOString(),
+        },
+      },
+    });
+
+    const result = await enforceAction(req, {}) as EnforcementDecision;
+    expect(result.decision).toBe("DENY");
+    const chk15 = result.checks.find((c) => c.check_id === "CHK-15");
+    expect(chk15?.result).toBe("fail");
+    expect(chk15?.detail).toContain("different approver");
+  });
+
+  it("permits four-eyes with different approver", async () => {
+    const poa = makePoa({ requirements: { ...makePoa().requirements, approval_mode: "four-eyes" } });
+    const req = makeRequest({
+      credential: { format: "jwt", poa_snapshot: poa },
+      context: {
+        approval_evidence: {
+          approver_id: "admin@example.com",
+          approved_at: new Date().toISOString(),
+        },
+      },
+    });
+
+    const result = await enforceAction(req, {}) as EnforcementDecision;
+    const chk15 = result.checks.find((c) => c.check_id === "CHK-15");
+    expect(chk15?.result).toBe("pass");
+  });
+});
+
+describe("CHK-16 Delegation Chain Scope Enforcement", () => {
+  it("blocks action outside delegation allowed_paths", async () => {
+    const poa = makePoa({
+      delegation_chain: [
+        {
+          delegator: "admin",
+          delegate: "agent-001",
+          scope_restriction: { allowed_paths: ["src/utils/"] },
+          max_depth_remaining: 1,
+        },
+      ],
+    });
+    const req = makeRequest({
+      action: { verb: "foundry.file.create", resource: "config/settings.ts" },
+      credential: { format: "jwt", poa_snapshot: poa },
+    });
+
+    const result = await enforceAction(req, {}) as EnforcementDecision;
+    expect(result.decision).toBe("DENY");
+    const chk16 = result.checks.find((c) => c.check_id === "CHK-16");
+    expect(chk16?.result).toBe("fail");
+    expect(chk16?.detail).toContain("allowed_paths");
+  });
+
+  it("allows action within delegation allowed_paths", async () => {
+    const poa = makePoa({
+      delegation_chain: [
+        {
+          delegator: "admin",
+          delegate: "agent-001",
+          scope_restriction: { allowed_paths: ["src/"] },
+          max_depth_remaining: 1,
+        },
+      ],
+    });
+    const req = makeRequest({
+      action: { verb: "foundry.file.create", resource: "src/utils/helper.ts" },
+      credential: { format: "jwt", poa_snapshot: poa },
+    });
+
+    const result = await enforceAction(req, {}) as EnforcementDecision;
+    const chk16 = result.checks.find((c) => c.check_id === "CHK-16");
+    expect(chk16?.result).toBe("pass");
+  });
+});
+
 describe("getEnforcementPolicy", () => {
   it("extracts policy from PoA", () => {
     const poa = makePoa();

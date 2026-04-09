@@ -4,6 +4,9 @@ import {
   AdapterRegistrationError,
   NoOpOAuthEngineAdapter,
   NoOpFoundryAdapter,
+  NoOpAIEnrichmentAdapter,
+  NoOpRiskScoringAdapter,
+  NoOpRegulatoryReasoningAdapter,
   createDefaultRegistry,
 } from "../adapters.js";
 import type { OAuthEngineAdapter, FoundryAdapter } from "../adapters.js";
@@ -128,6 +131,43 @@ describe("NoOpFoundryAdapter", () => {
     const result = await adapter.validateEnvironment();
     expect(result.valid).toBe(false);
     expect(result.capabilities).toEqual([]);
+  });
+});
+
+describe("NoOpAIEnrichmentAdapter", () => {
+  it("returns not enriched", async () => {
+    const adapter = new NoOpAIEnrichmentAdapter();
+    expect(adapter.adapterType).toBe("C");
+    const result = await adapter.enrichMandate({} as any);
+    expect(result.enriched).toBe(false);
+  });
+
+  it("returns zero risk score", async () => {
+    const adapter = new NoOpAIEnrichmentAdapter();
+    const result = await adapter.assessRisk({} as any);
+    expect(result.risk_score).toBe(0);
+    expect(result.risk_factors).toEqual([]);
+  });
+});
+
+describe("NoOpRiskScoringAdapter", () => {
+  it("returns zero score", async () => {
+    const adapter = new NoOpRiskScoringAdapter();
+    expect(adapter.adapterType).toBe("C");
+    const result = await adapter.scoreMandate({} as any);
+    expect(result.score).toBe(0);
+    expect(result.breakdown).toEqual({});
+  });
+});
+
+describe("NoOpRegulatoryReasoningAdapter", () => {
+  it("returns compliant with recommendation", async () => {
+    const adapter = new NoOpRegulatoryReasoningAdapter();
+    expect(adapter.adapterType).toBe("D");
+    const result = await adapter.evaluateCompliance({} as any, []);
+    expect(result.compliant).toBe(true);
+    expect(result.violations).toEqual([]);
+    expect(result.recommendations.length).toBeGreaterThan(0);
   });
 });
 

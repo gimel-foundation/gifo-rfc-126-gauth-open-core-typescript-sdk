@@ -218,9 +218,18 @@ export const LiveMandateState = z.object({
 });
 export type LiveMandateState = z.infer<typeof LiveMandateState>;
 
+export const ApprovalEvidence = z.object({
+  approver_id: z.string(),
+  approved_at: z.string().datetime(),
+  method: z.enum(["manual", "automated", "four-eyes"]).optional(),
+  reference: z.string().optional(),
+});
+export type ApprovalEvidence = z.infer<typeof ApprovalEvidence>;
+
 export const EnforcementContext = z.object({
   session_state: SessionState.optional(),
   live_mandate_state: LiveMandateState.optional(),
+  approval_evidence: ApprovalEvidence.optional(),
 });
 export type EnforcementContext = z.infer<typeof EnforcementContext>;
 
@@ -662,6 +671,22 @@ export const CORE_VERBS = {
   "foundry.command.run": "urn:gauth:verb:foundry:command:run",
   "foundry.agent.delegate": "urn:gauth:verb:foundry:agent:delegate",
 } as const;
+
+export const GOVERNANCE_RESTRICTED_TRANSACTIONS: Record<GovernanceProfile, Set<string>> = {
+  minimal: new Set(),
+  standard: new Set(["irreversible_delete"]),
+  strict: new Set(["irreversible_delete", "external_transfer"]),
+  enterprise: new Set(["irreversible_delete", "external_transfer", "privilege_escalation"]),
+  behoerde: new Set(["irreversible_delete", "external_transfer", "privilege_escalation", "cross_boundary"]),
+};
+
+export const GOVERNANCE_RESTRICTED_DECISIONS: Record<GovernanceProfile, Set<string>> = {
+  minimal: new Set(),
+  standard: new Set(),
+  strict: new Set(["autonomous_deployment"]),
+  enterprise: new Set(["autonomous_deployment", "autonomous_data_access"]),
+  behoerde: new Set(["autonomous_deployment", "autonomous_data_access", "autonomous_external_comms"]),
+};
 
 export const PHASE_VERB_MAP: Record<Phase, Set<string>> = {
   plan: new Set([

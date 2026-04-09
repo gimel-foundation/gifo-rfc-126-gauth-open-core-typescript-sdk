@@ -43,6 +43,9 @@ export {
   CORE_VERBS,
   PHASE_VERB_MAP,
   DEFAULT_GOVERNANCE_CEILINGS,
+  GOVERNANCE_RESTRICTED_TRANSACTIONS,
+  GOVERNANCE_RESTRICTED_DECISIONS,
+  ApprovalEvidence,
 } from "./types.js";
 
 export type {
@@ -119,6 +122,9 @@ export {
   AdapterRegistrationError,
   NoOpOAuthEngineAdapter,
   NoOpFoundryAdapter,
+  NoOpAIEnrichmentAdapter,
+  NoOpRiskScoringAdapter,
+  NoOpRegulatoryReasoningAdapter,
   createDefaultRegistry,
 } from "./adapters.js";
 export type {

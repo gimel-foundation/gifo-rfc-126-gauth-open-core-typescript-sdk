@@ -22,6 +22,8 @@ import {
   PEP_INTERFACE_VERSION,
   PHASE_VERB_MAP,
   DEFAULT_GOVERNANCE_CEILINGS,
+  GOVERNANCE_RESTRICTED_TRANSACTIONS,
+  GOVERNANCE_RESTRICTED_DECISIONS,
 } from "./types.js";
 import { matchGlob } from "./crypto.js";
 import { validateExtendedToken, type TokenValidationOptions, GAuthTokenError } from "./token.js";
@@ -100,12 +102,16 @@ async function parseCredential(
   if (credRef.poa_snapshot) {
     const snap = credRef.poa_snapshot as Record<string, unknown>;
     const scope = (snap.scope ?? snap) as PoAScope;
+    const parties = snap.parties as Record<string, unknown> | undefined;
+    const requirements = snap.requirements as Record<string, unknown> | undefined;
+    const subject = (parties?.subject as string) ?? (snap.subject as string) ?? "";
+    const approvalMode = (requirements?.approval_mode as string) ?? (snap.approval_mode as string) ?? "supervised";
     return {
       poa: scope,
-      subject: (snap.subject as string) ?? "",
+      subject,
       mandateId: snap.mandate_id as string | undefined,
       mandateStatus: snap.mandate_status as string | undefined,
-      approvalMode: (snap.approval_mode as string) ?? "supervised",
+      approvalMode,
       delegationChain: snap.delegation_chain as ParsedCredential["delegationChain"],
     };
   }
@@ -179,7 +185,7 @@ export async function enforceAction(
     if (chk13.constraint) constraints.push(chk13.constraint);
     checks.push(runCHK14(parsed, request));
     checks.push(runCHK15(parsed, request));
-    checks.push(runCHK16(parsed));
+    checks.push(runCHK16(parsed, request));
 
     for (const check of checks) {
       if (check.result === "fail") {
@@ -577,6 +583,18 @@ function runCHK11(parsed: ParsedCredential, request: EnforcementRequest): CheckR
   if (!request.action.transaction_type) {
     return makeCheckResult("CHK-11", "Transaction Type", "skip", "No transaction type in action.");
   }
+
+  const profile = parsed.poa.governance_profile;
+  const restricted = GOVERNANCE_RESTRICTED_TRANSACTIONS[profile];
+  if (restricted && restricted.has(request.action.transaction_type)) {
+    return makeCheckResult(
+      "CHK-11",
+      "Transaction Type",
+      "fail",
+      `Transaction type '${request.action.transaction_type}' is restricted under governance profile '${profile}'.`,
+    );
+  }
+
   return makeCheckResult("CHK-11", "Transaction Type", "pass", "Transaction type check passed.");
 }
 
@@ -584,6 +602,18 @@ function runCHK12(parsed: ParsedCredential, request: EnforcementRequest): CheckR
   if (!request.action.decision_type) {
     return makeCheckResult("CHK-12", "Decision Type", "skip", "No decision type in action.");
   }
+
+  const profile = parsed.poa.governance_profile;
+  const restricted = GOVERNANCE_RESTRICTED_DECISIONS[profile];
+  if (restricted && restricted.has(request.action.decision_type)) {
+    return makeCheckResult(
+      "CHK-12",
+      "Decision Type",
+      "fail",
+      `Decision type '${request.action.decision_type}' is restricted under governance profile '${profile}'.`,
+    );
+  }
+
   return makeCheckResult("CHK-12", "Decision Type", "pass", "Decision type check passed.");
 }
 
@@ -634,18 +664,29 @@ function runCHK15(parsed: ParsedCredential, request: EnforcementRequest): CheckR
     return makeCheckResult("CHK-15", "Approval", "pass", "Autonomous mode — no approval required.");
   }
 
-  if (parsed.approvalMode === "four-eyes") {
-    return makeCheckResult("CHK-15", "Approval", "pass", "Four-eyes mode — approval assumed granted for enforcement context.");
-  }
+  const evidence = request.context?.approval_evidence;
 
   if (parsed.approvalMode === "supervised") {
-    return makeCheckResult("CHK-15", "Approval", "pass", "Supervised mode — approval assumed granted for enforcement context.");
+    if (!evidence) {
+      return makeCheckResult("CHK-15", "Approval", "fail", "Supervised mode requires approval evidence in enforcement context.");
+    }
+    return makeCheckResult("CHK-15", "Approval", "pass", `Supervised mode — approved by ${evidence.approver_id}.`);
   }
 
-  return makeCheckResult("CHK-15", "Approval", "pass", "Approval check passed.");
+  if (parsed.approvalMode === "four-eyes") {
+    if (!evidence) {
+      return makeCheckResult("CHK-15", "Approval", "fail", "Four-eyes mode requires approval evidence in enforcement context.");
+    }
+    if (evidence.approver_id === parsed.subject) {
+      return makeCheckResult("CHK-15", "Approval", "fail", "Four-eyes mode requires a different approver than the acting subject.");
+    }
+    return makeCheckResult("CHK-15", "Approval", "pass", `Four-eyes mode — approved by ${evidence.approver_id}.`);
+  }
+
+  return makeCheckResult("CHK-15", "Approval", "fail", `Unknown approval mode '${parsed.approvalMode}'.`);
 }
 
-function runCHK16(parsed: ParsedCredential): CheckResult {
+function runCHK16(parsed: ParsedCredential, request: EnforcementRequest): CheckResult {
   const chain = parsed.delegationChain;
   if (!chain || chain.length === 0) {
     return makeCheckResult("CHK-16", "Delegation Chain", "skip", "No delegation chain present.");
@@ -655,6 +696,53 @@ function runCHK16(parsed: ParsedCredential): CheckResult {
     const entry = chain[i];
     if (entry.max_depth_remaining !== undefined && entry.max_depth_remaining < 0) {
       return makeCheckResult("CHK-16", "Delegation Chain", "fail", `Delegation depth exceeded at chain position ${i}.`);
+    }
+
+    if (entry.scope_restriction) {
+      const restriction = entry.scope_restriction as Record<string, unknown>;
+
+      if (restriction.allowed_paths && Array.isArray(restriction.allowed_paths)) {
+        const resource = request.action.resource;
+        const paths = restriction.allowed_paths as string[];
+        const allowed = paths.some(
+          (p) => resource === p || resource.startsWith(p.endsWith("/") ? p : p + "/"),
+        );
+        if (!allowed) {
+          return makeCheckResult(
+            "CHK-16",
+            "Delegation Chain",
+            "fail",
+            `Resource '${resource}' not within delegation allowed_paths at chain position ${i}.`,
+          );
+        }
+      }
+
+      if (restriction.denied_paths && Array.isArray(restriction.denied_paths)) {
+        const resource = request.action.resource;
+        const denied = (restriction.denied_paths as string[]).some((p) => matchGlob(p, resource));
+        if (denied) {
+          return makeCheckResult(
+            "CHK-16",
+            "Delegation Chain",
+            "fail",
+            `Resource '${resource}' is in delegation denied_paths at chain position ${i}.`,
+          );
+        }
+      }
+
+      if (restriction.core_verbs && typeof restriction.core_verbs === "object") {
+        const verbs = restriction.core_verbs as Record<string, { allowed?: boolean }>;
+        const shortVerb = extractVerbShort(request.action.verb) ?? request.action.verb;
+        const verbPolicy = verbs[shortVerb] ?? verbs[request.action.verb];
+        if (verbPolicy && !verbPolicy.allowed) {
+          return makeCheckResult(
+            "CHK-16",
+            "Delegation Chain",
+            "fail",
+            `Verb '${shortVerb}' is not allowed in delegation scope restriction at chain position ${i}.`,
+          );
+        }
+      }
     }
   }
 

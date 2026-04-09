@@ -857,6 +857,88 @@ export class ManagementAPI {
     };
   }
 
+  async updateGovernanceProfile(
+    mandateId: string,
+    newProfile: GovernanceProfile,
+    updatedBy: string,
+  ): Promise<{ mandate_id: string; previous_profile: GovernanceProfile; new_profile: GovernanceProfile; audit: MandateAuditEntry } | ManagementError> {
+    const mandate = await this.store.get(mandateId);
+    if (!mandate) return this.notFound(mandateId);
+
+    if (mandate.status !== "DRAFT") {
+      return {
+        error_code: MGMT_ERROR_CODES.INVALID_STATE_TRANSITION,
+        message: "Governance profile can only be changed on DRAFT mandates (scope is immutable once ACTIVE).",
+        timestamp: new Date().toISOString(),
+        mandate_id: mandateId,
+      };
+    }
+
+    const GOVERNANCE_STRICTNESS: Record<string, number> = {
+      minimal: 0, standard: 1, strict: 2, enterprise: 3, behoerde: 4,
+    };
+    const currentLevel = GOVERNANCE_STRICTNESS[mandate.scope.governance_profile] ?? 0;
+    const newLevel = GOVERNANCE_STRICTNESS[newProfile] ?? 0;
+    if (newLevel < currentLevel) {
+      return {
+        error_code: MGMT_ERROR_CODES.VALIDATION_FAILED,
+        message: `Cannot relax governance profile from '${mandate.scope.governance_profile}' to '${newProfile}'. Only tightening is allowed.`,
+        timestamp: new Date().toISOString(),
+        mandate_id: mandateId,
+      };
+    }
+
+    const previousProfile = mandate.scope.governance_profile;
+    mandate.scope.governance_profile = newProfile;
+
+    const ceiling = this.ceilings[newProfile];
+    if (ceiling) {
+      if (mandate.requirements.budget && mandate.requirements.budget.total_cents > ceiling.max_budget_cents) {
+        mandate.requirements.budget.total_cents = ceiling.max_budget_cents;
+        if (mandate.requirements.budget.remaining_cents !== undefined) {
+          mandate.requirements.budget.remaining_cents = Math.min(
+            mandate.requirements.budget.remaining_cents,
+            ceiling.max_budget_cents,
+          );
+        }
+      }
+    }
+
+    const toolPermissionsHash = await computeToolPermissionsHash(mandate.scope.core_verbs);
+    const platformPermissionsHash = await computePlatformPermissionsHash(
+      mandate.scope.platform_permissions as Record<string, unknown> | undefined,
+    );
+    mandate.scope_checksum = await computeScopeChecksum({
+      governance_profile: mandate.scope.governance_profile,
+      phase: mandate.scope.phase,
+      allowed_paths: mandate.scope.allowed_paths,
+      denied_paths: mandate.scope.denied_paths,
+      allowed_regions: mandate.scope.allowed_regions,
+      allowed_sectors: mandate.scope.allowed_sectors,
+      active_modules: mandate.scope.active_modules,
+      tool_permissions_hash: toolPermissionsHash,
+      platform_permissions_hash: platformPermissionsHash,
+    });
+    mandate.tool_permissions_hash = toolPermissionsHash;
+    mandate.platform_permissions_hash = platformPermissionsHash;
+
+    const auditEntry: MandateAuditEntry = {
+      operation: "UPDATE_GOVERNANCE_PROFILE",
+      performed_by: updatedBy,
+      timestamp: new Date().toISOString(),
+      mandate_id: mandateId,
+    };
+    mandate.audit_trail.push(auditEntry);
+    await this.store.update(mandate);
+
+    return {
+      mandate_id: mandateId,
+      previous_profile: previousProfile,
+      new_profile: newProfile,
+      audit: auditEntry,
+    };
+  }
+
   private invalidTransition(mandateId: string, from: string, to: string): ManagementError {
     return {
       error_code: MGMT_ERROR_CODES.INVALID_STATE_TRANSITION,

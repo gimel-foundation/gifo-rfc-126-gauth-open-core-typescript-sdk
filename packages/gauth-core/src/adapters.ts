@@ -198,6 +198,40 @@ export class NoOpFoundryAdapter implements FoundryAdapter {
   }
 }
 
+export class NoOpAIEnrichmentAdapter implements AIEnrichmentAdapter {
+  readonly adapterType = "C" as const;
+  readonly name = "noop-ai-enrichment";
+  readonly packageNamespace = "@gauth/adapters";
+
+  async enrichMandate(): Promise<{ enriched: boolean; suggestions?: Record<string, unknown>[] }> {
+    return { enriched: false };
+  }
+
+  async assessRisk(): Promise<{ risk_score: number; risk_factors: string[] }> {
+    return { risk_score: 0, risk_factors: [] };
+  }
+}
+
+export class NoOpRiskScoringAdapter implements RiskScoringAdapter {
+  readonly adapterType = "C" as const;
+  readonly name = "noop-risk-scoring";
+  readonly packageNamespace = "@gauth/adapters";
+
+  async scoreMandate(): Promise<{ score: number; breakdown: Record<string, number>; recommendations: string[] }> {
+    return { score: 0, breakdown: {}, recommendations: [] };
+  }
+}
+
+export class NoOpRegulatoryReasoningAdapter implements RegulatoryReasoningAdapter {
+  readonly adapterType = "D" as const;
+  readonly name = "noop-regulatory";
+  readonly packageNamespace = "@gauth/adapters";
+
+  async evaluateCompliance(): Promise<{ compliant: boolean; violations: string[]; recommendations: string[] }> {
+    return { compliant: true, violations: [], recommendations: ["Register a production RegulatoryReasoningAdapter for real compliance checks."] };
+  }
+}
+
 export function createDefaultRegistry(): AdapterRegistry {
   return new AdapterRegistry();
 }
