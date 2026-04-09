@@ -257,8 +257,13 @@ export async function enforceAction(
     };
   } catch (err) {
     if (err instanceof GAuthTokenError) {
+      const errorCode = err.violationCode === "CREDENTIAL_EXPIRED"
+        ? PEP_ERROR_CODES.CREDENTIAL_EXPIRED
+        : err.violationCode === "CREDENTIAL_INVALID"
+          ? PEP_ERROR_CODES.CREDENTIAL_INVALID
+          : PEP_ERROR_CODES.CREDENTIAL_PARSE_ERROR;
       return {
-        error_code: PEP_ERROR_CODES.CREDENTIAL_PARSE_ERROR,
+        error_code: errorCode,
         message: err.message,
         timestamp: new Date().toISOString(),
         request_id: request.request_id,

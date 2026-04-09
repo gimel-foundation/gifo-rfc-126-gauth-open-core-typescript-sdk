@@ -8,6 +8,7 @@ import {
   computePlatformPermissionsHash,
 } from "./crypto.js";
 
+const ALLOWED_ALGORITHMS = new Set(["RS256", "ES256"]);
 const PROHIBITED_ALGORITHMS = new Set(["HS256", "HS384", "HS512"]);
 
 export interface TokenCreationOptions {
@@ -28,9 +29,9 @@ export async function createExtendedToken(
 ): Promise<string> {
   const alg = options.algorithm ?? "RS256";
 
-  if (PROHIBITED_ALGORITHMS.has(alg)) {
+  if (!ALLOWED_ALGORITHMS.has(alg)) {
     throw new GAuthTokenError(
-      `Algorithm ${alg} is prohibited by GAuth RFC 0116. Use RS256 (required) or ES256 (recommended).`,
+      `Algorithm '${alg}' is not allowed by GAuth RFC 0116. Only RS256 (required) and ES256 (recommended) are permitted.`,
     );
   }
 
@@ -169,9 +170,9 @@ export async function validateExtendedToken(
 
   const { protectedHeader } = result;
 
-  if (PROHIBITED_ALGORITHMS.has(protectedHeader.alg)) {
+  if (!ALLOWED_ALGORITHMS.has(protectedHeader.alg)) {
     throw new GAuthTokenError(
-      `Algorithm ${protectedHeader.alg} is prohibited by GAuth RFC 0116.`,
+      `Algorithm '${protectedHeader.alg}' is not allowed by GAuth RFC 0116. Only RS256 and ES256 are permitted.`,
       "CREDENTIAL_INVALID",
     );
   }
