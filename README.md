@@ -136,7 +136,7 @@ Three capabilities are excluded from the open-source license and are available o
 
 The full PEP enforcement pipeline (16 checks), Management API, and all Type A/B adapter interfaces are fully open-source under MPL 2.0.
 
-Contributions to Excluded Components require a separate CLA. Contact: licensing@gimel.foundation
+Contributions to Excluded Components require a separate CLA. Contact: info@gimelid.com
 
 ---
 

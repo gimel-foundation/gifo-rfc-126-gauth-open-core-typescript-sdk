@@ -81,7 +81,7 @@ use of Excluded Components.
 
 ## Contact
 
-For proprietary licensing inquiries: licensing@gimel.foundation
+For proprietary licensing inquiries: info@gimelid.com
 
 Copyright (c) 2026 Gimel Foundation gGmbH i.G.
 www.GimelFoundation.com
