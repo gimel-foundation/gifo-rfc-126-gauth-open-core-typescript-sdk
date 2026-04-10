@@ -1,3 +1,4 @@
+import { createHmac, timingSafeEqual } from "node:crypto";
 import type {
   PoACredential,
   GAuthJWTClaims,
@@ -573,7 +574,6 @@ export function computeS2SHeaders(
   const payload = typeof body === "string" ? body : JSON.stringify(body);
   let signature: string;
   try {
-    const { createHmac } = require("crypto");
     const hmac = createHmac("sha256", serviceSecret);
     hmac.update(payload);
     signature = "sha256=" + hmac.digest("hex");
@@ -593,7 +593,6 @@ export function verifyS2SSignature(
 ): boolean {
   const payload = typeof body === "string" ? body : JSON.stringify(body);
   try {
-    const { createHmac, timingSafeEqual } = require("crypto");
     const hmac = createHmac("sha256", serviceSecret);
     hmac.update(payload);
     const computed = "sha256=" + hmac.digest("hex");

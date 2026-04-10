@@ -260,6 +260,7 @@ export interface CheckResult {
   check_name: string;
   result: CheckResultOutcome;
   detail?: string;
+  violation_code?: string;
 }
 
 export interface EnforcedConstraint {

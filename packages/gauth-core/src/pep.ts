@@ -137,8 +137,10 @@ async function parseCredential(
   throw new GAuthTokenError("Cannot parse credential: no token or poa_snapshot provided", "CREDENTIAL_PARSE_ERROR");
 }
 
-function makeCheckResult(id: string, name: string, result: "pass" | "fail" | "skip" | "constrain", detail?: string): CheckResult {
-  return { check_id: id, check_name: name, result, detail };
+function makeCheckResult(id: string, name: string, result: "pass" | "fail" | "skip" | "constrain", detail?: string, violationCode?: string): CheckResult {
+  const r: CheckResult = { check_id: id, check_name: name, result, detail };
+  if (violationCode) r.violation_code = violationCode;
+  return r;
 }
 
 export async function enforceAction(
@@ -207,7 +209,7 @@ export async function enforceAction(
 
     for (const check of checks) {
       if (check.result === "fail") {
-        const code = checkIdToViolationCode(check.check_id);
+        const code = (check.violation_code as ViolationCode) ?? checkIdToViolationCode(check.check_id);
         violations.push({
           code,
           message: check.detail ?? `Check ${check.check_id} failed`,
@@ -359,15 +361,15 @@ function runCHK02(parsed: ParsedCredential, request: EnforcementRequest, opts: P
   if (parsed.exp !== undefined) {
     const now = Math.floor(Date.now() / 1000);
     if (parsed.exp < now) {
-      return makeCheckResult("CHK-02", "Temporal & Status", "fail", "Credential has expired.");
+      return makeCheckResult("CHK-02", "Temporal & Status", "fail", "Credential has expired.", VIOLATION_CODES.CREDENTIAL_EXPIRED);
     }
     if (parsed.nbf !== undefined && parsed.nbf > now) {
-      return makeCheckResult("CHK-02", "Temporal & Status", "fail", "Credential is not yet valid.");
+      return makeCheckResult("CHK-02", "Temporal & Status", "fail", "Credential is not yet valid.", VIOLATION_CODES.CREDENTIAL_INVALID);
     }
   }
 
   if (parsed.subject && request.agent.agent_id !== parsed.subject) {
-    return makeCheckResult("CHK-02", "Temporal & Status", "fail", `Agent mismatch: expected '${parsed.subject}', got '${request.agent.agent_id}'.`);
+    return makeCheckResult("CHK-02", "Temporal & Status", "fail", `Agent mismatch: expected '${parsed.subject}', got '${request.agent.agent_id}'.`, VIOLATION_CODES.AGENT_MISMATCH);
   }
 
   if (isStateful && request.context?.live_mandate_state) {
@@ -379,12 +381,20 @@ function runCHK02(parsed: ParsedCredential, request: EnforcementRequest, opts: P
         superseded: "CREDENTIAL_SUPERSEDED",
         budget_exceeded: "BUDGET_EXHAUSTED",
       };
-      return makeCheckResult("CHK-02", "Temporal & Status", "fail", `Mandate status is ${liveStatus}.`);
+      const statusCode = codeMap[liveStatus] ?? VIOLATION_CODES.CREDENTIAL_INVALID;
+      return makeCheckResult("CHK-02", "Temporal & Status", "fail", `Mandate status is ${liveStatus}.`, statusCode);
     }
   }
 
   if (parsed.mandateStatus && parsed.mandateStatus !== "active") {
-    return makeCheckResult("CHK-02", "Temporal & Status", "fail", `Mandate status is ${parsed.mandateStatus}.`);
+    const statusCodeMap: Record<string, string> = {
+      revoked: VIOLATION_CODES.CREDENTIAL_REVOKED,
+      expired: VIOLATION_CODES.CREDENTIAL_EXPIRED,
+      superseded: VIOLATION_CODES.CREDENTIAL_SUPERSEDED,
+      suspended: VIOLATION_CODES.CREDENTIAL_INVALID,
+    };
+    const fallbackCode = statusCodeMap[parsed.mandateStatus] ?? VIOLATION_CODES.CREDENTIAL_INVALID;
+    return makeCheckResult("CHK-02", "Temporal & Status", "fail", `Mandate status is ${parsed.mandateStatus}.`, fallbackCode);
   }
 
   return makeCheckResult("CHK-02", "Temporal & Status", "pass", "Temporal and status checks passed.");
@@ -674,7 +684,7 @@ function runCHK14(parsed: ParsedCredential, request: EnforcementRequest): CheckR
   }
 
   if (ctxSession?.tool_calls_used !== undefined && session?.remaining_tool_calls !== undefined) {
-    if (ctxSession.tool_calls_used >= (session.remaining_tool_calls + ctxSession.tool_calls_used)) {
+    if (ctxSession.tool_calls_used >= session.remaining_tool_calls) {
       return makeCheckResult("CHK-14", "Session Limits", "fail", "Tool call limit reached.");
     }
   }
