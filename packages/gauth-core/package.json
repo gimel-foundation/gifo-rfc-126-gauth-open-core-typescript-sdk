@@ -23,6 +23,7 @@
     "dist",
     "LICENSE",
     "ADDITIONAL-TERMS.md",
+    "CONTRIBUTING.md",
     "README.md"
   ],
   "scripts": {

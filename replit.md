@@ -29,7 +29,8 @@ Located at `packages/gauth-core/`. TypeScript reference implementation of the GA
 - **Key modules**: `types.ts` (PoA schema, governance profiles, 7-slot connector model, tariff codes), `pep.ts` (16-check PEP engine), `management.ts` (mandate lifecycle), `token.ts` (JWT RS256/ES256), `adapters.ts` (7-slot connector registry, all adapter interfaces, tariff gating, S2S auth), `http.ts` (HTTP bindings)
 - **Adapter Types**: Internal (PDP), A (OAuth Engine), B (Foundry, Wallet), C (Governance, Web3, DNA — sealed/proprietary), D (Billing — internal)
 - **Tariff Model**: O (Open Core), S (Small), M (Medium), L (Large) — controls adapter slot availability
-- **Legal Files**: `LICENSE` (MPL 2.0 + Gimel Foundation Supplementary Terms), `ADDITIONAL-TERMS.md` (exclusions)
+- **Legal Files**: `LICENSE` (MPL 2.0 + Gimel Foundation Supplementary Terms), `ADDITIONAL-TERMS.md` (exclusions), `CONTRIBUTING.md` (contribution/release policy v1.0)
+- **Root README**: `README.md` — GitHub monorepo landing page with architecture overview, quick start, tariff model, and license info
 
 ## Key Commands
 
