@@ -22,6 +22,7 @@
   "files": [
     "dist",
     "LICENSE",
+    "ADDITIONAL-TERMS.md",
     "README.md"
   ],
   "scripts": {
