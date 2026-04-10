@@ -2,7 +2,7 @@
 
 **GAuth Open Core TypeScript SDK** — the reference implementation of the GAuth authorization protocol for AI agent governance.
 
-Implements [GiFo-RFCs 0110/0111, 0115, 0116, 0117, 0118](https://gimelfoundation.com/rfcs) from Gimel Foundation.
+Implements [GiFo-RFCs 0110/0111, 0115, 0116 v2.2, 0117 v1.2, 0118 v1.1](https://gimelfoundation.com/rfcs) from Gimel Foundation.
 
 ## What is GAuth?
 
@@ -12,6 +12,43 @@ GAuth is an open authorization protocol that brings Power-of-Attorney (PoA) cred
 - **Enforce** those credentials at runtime via a Policy Enforcement Point (PEP)
 - **Manage** mandate lifecycles (create, activate, suspend, revoke, delegate)
 - **Govern** agent behavior through governance profiles, budgets, and session limits
+
+## What's in the Box
+
+| Module | Description |
+|--------|-------------|
+| `types` | PoA schema, enforcement types, management types, violation codes, tariff codes, connector slot model |
+| `crypto` | Canonical JSON, SHA-256 checksums, scope checksum computation |
+| `token` | JWT creation/validation with RS256/ES256, scope checksum verification |
+| `pep` | 16-check PEP enforcement pipeline (stateless + stateful modes) |
+| `management` | Mandate lifecycle CRUD, budget operations, delegation, governance profile assignment |
+| `adapters` | 7-slot connector model, adapter registry, tariff gating, Type C attestation, S2S auth |
+| `http` | HTTP bindings for PEP and Management API endpoints |
+
+## Architecture
+
+```
+SDK Client
+    │
+    ├─ PEP Layer (RFC 0117)     → Enforce PoA credentials at runtime
+    │     POST /gauth/pep/v1/enforce
+    │     POST /gauth/pep/v1/enforce/batch
+    │     POST /gauth/pep/v1/policy
+    │     GET  /gauth/pep/v1/health
+    │
+    ├─ Management Layer (RFC 0118) → CRUD mandate lifecycle
+    │     POST   /gauth/mgmt/v1/mandates
+    │     POST   /gauth/mgmt/v1/mandates/:id/activate
+    │     POST   /gauth/mgmt/v1/mandates/:id/revoke
+    │     POST   /gauth/mgmt/v1/mandates/:id/suspend
+    │     POST   /gauth/mgmt/v1/mandates/:id/resume
+    │     POST   /gauth/mgmt/v1/mandates/:id/delegate
+    │     PUT    /gauth/mgmt/v1/mandates/:id/governance-profile
+    │     POST   /gauth/mgmt/v1/mandates/:id/budget/top-up
+    │     POST   /gauth/mgmt/v1/mandates/:id/ttl/extend
+    │
+    └─ Connector Layer → 7-slot adapter model with tariff gating
+```
 
 ## Installation
 
@@ -25,40 +62,24 @@ Requires Node.js >= 18.0.0.
 
 ## Quick Start
 
-### Define a PoA Credential
-
 ```typescript
-import type { PoACredential } from "@gauth/core";
+import { GAuthClient } from "@gauth/core";
 
-const poa: PoACredential = {
-  schema_version: "0116.2.2",
-  parties: {
-    issuer: "https://auth.example.com",
-    subject: "agent-001",
-    customer_id: "cust-123",
-    project_id: "proj-456",
-    issued_by: "admin@example.com",
-  },
-  scope: {
-    governance_profile: "standard",
-    phase: "build",
-    core_verbs: {
-      "foundry.file.create": { allowed: true },
-      "foundry.file.modify": { allowed: true },
-      "foundry.file.delete": { allowed: true, constraints: { path_patterns: ["src/**"] } },
-      "foundry.command.run": { allowed: true, constraints: { denied_commands: ["rm -rf"] } },
-      "foundry.agent.delegate": { allowed: false },
-    },
-    allowed_paths: ["src/", "tests/"],
-    denied_paths: [".env", "secrets/", "node_modules/"],
-  },
-  requirements: {
-    approval_mode: "autonomous",
-    budget: { total_cents: 10000 },
-    ttl_seconds: 3600,
-    session_limits: { max_tool_calls: 500 },
-  },
-};
+const client = new GAuthClient({ baseUrl: "https://gauth.example.com" });
+
+const decision = await client.pep.enforce({
+  credential: myPoaToken,
+  action: { verb: "urn:gauth:verb:core:file:modify", resource: "src/main.ts" },
+  agent: { agentId: "agent_456", sessionId: "sess_789" },
+});
+
+if (decision.decision === "PERMIT") {
+  proceed();
+} else if (decision.decision === "CONSTRAIN") {
+  proceedWith(decision.enforcedConstraints);
+} else {
+  block(decision.violations);
+}
 ```
 
 ### Enforce Actions (PEP)
@@ -88,67 +109,33 @@ if (isEnforcementError(result)) {
 }
 ```
 
-### Manage Mandates
+### Integration Patterns
 
-```typescript
-import { ManagementAPI, InMemoryMandateStore } from "@gauth/core";
+GAuth supports three deployment patterns:
 
-const api = new ManagementAPI(new InMemoryMandateStore());
+| Pattern | Description | SDK Deliverable |
+|---------|-------------|-----------------|
+| **Sidecar** | Claims provider for existing OAuth/OIDC servers (Keycloak, Azure AD, Auth0, etc.) | `OAuthEngineAdapter` claims provider library |
+| **Gateway** | PEP middleware at the API gateway (Express, Go, NGINX, Envoy) | PEP middleware library |
+| **Full Stack** | Integrated OAuth + Management + PEP bundle for greenfield deployments | Deployment bundle |
 
-const mandate = await api.createMandate({
-  parties: {
-    subject: "agent-001",
-    customer_id: "cust-123",
-    project_id: "proj-456",
-    issued_by: "admin@example.com",
-  },
-  scope: poa.scope,
-  requirements: {
-    approval_mode: "autonomous",
-    budget: { total_cents: 10000 },
-    ttl_seconds: 3600,
-  },
-});
+### 7-Slot Connector Model
 
-// Lifecycle: DRAFT → ACTIVE → SUSPENDED ↔ ACTIVE → REVOKED/EXPIRED
-const activation = await api.activateMandate({
-  mandate_id: mandate.mandate_id,
-  activated_by: "admin@example.com",
-});
-```
-
-### JWT Token Creation & Validation
-
-```typescript
-import { createExtendedToken, validateExtendedToken } from "@gauth/core";
-import { generateKeyPair } from "jose";
-
-const { privateKey, publicKey } = await generateKeyPair("RS256");
-
-const token = await createExtendedToken(poa, {
-  privateKey,
-  keyId: "key-001",
-  issuer: "https://auth.example.com",
-  audience: ["https://api.example.com"],
-  credentialId: "cred-001",
-});
-
-const validated = await validateExtendedToken(token, {
-  publicKey,
-  issuer: "https://auth.example.com",
-  audience: "https://api.example.com",
-});
-```
-
-## Architecture
+| Slot | Name | Type | Description |
+|------|------|------|-------------|
+| 1 | `pdp` | Internal | Policy Decision Engine (mandatory) |
+| 2 | `oauth_engine` | A | OAuth/OIDC Engine (mandatory) |
+| 3 | `foundry` | B | Agent Foundry (optional) |
+| 4 | `wallet` | B | Credential Wallet (optional) |
+| 5 | `ai_governance` | C | AI Governance — sealed, proprietary |
+| 6 | `web3_identity` | C | Web3 Identity — sealed, proprietary |
+| 7 | `dna_identity` | C | DNA Identity — sealed, proprietary |
 
 ### PEP Engine (16 Checks)
 
-The Policy Enforcement Point evaluates every action request against 16 sequential checks:
-
 | Check | Name | Description |
 |-------|------|-------------|
-| CHK-01 | Credential Integrity | Validates credential structure |
+| CHK-01 | Credential Integrity | Validates credential structure and scope checksum |
 | CHK-02 | Temporal & Status | Expiry, agent match, mandate status |
 | CHK-03 | Governance Profile | Profile ceiling validation |
 | CHK-04 | Phase | Phase-verb compatibility |
@@ -165,11 +152,7 @@ The Policy Enforcement Point evaluates every action request against 16 sequentia
 | CHK-15 | Approval | Approval mode enforcement |
 | CHK-16 | Delegation Chain | Delegation depth & scope |
 
-The PEP is **fail-closed**: any check failure results in DENY.
-
 ### Governance Profiles
-
-Five built-in profiles with increasing capability ceilings:
 
 | Profile | Max TTL | Max Budget | Delegation | Deploy Targets |
 |---------|---------|-----------|------------|----------------|
@@ -179,68 +162,31 @@ Five built-in profiles with increasing capability ceilings:
 | `enterprise` | 7d | $5,000 | 3 | dev, staging, prod |
 | `behoerde` | 24h | $1,000 | 2 | dev, staging |
 
-### Mandate Lifecycle
+### Tariff Gating
 
-```
-DRAFT → ACTIVE → SUSPENDED (reversible)
-                → REVOKED (terminal)
-                → EXPIRED (terminal)
-                → BUDGET_EXCEEDED (terminal)
-                → SUPERSEDED (terminal)
-```
-
-- **Scope is immutable** once ACTIVE — only budget ceiling and TTL may increase
-- Budget and TTL are **additive-only** (can only increase, never decrease)
-- Activating a new mandate for the same agent+project **supersedes** the existing one
-
-### Adapter System
-
-| Type | Name | Status |
-|------|------|--------|
-| A | OAuthEngineAdapter | Open (MPL 2.0) |
-| B | FoundryAdapter | Open (MPL 2.0) |
-| C | AIEnrichmentAdapter / RiskScoringAdapter | Sealed registration |
-| D | RegulatoryReasoningAdapter | Sealed registration |
-
-Adapters must come from trusted namespaces (`@gauth/`, `@gimel/`, `@gimel-foundation/`).
-
-## HTTP Bindings
-
-The SDK includes HTTP request/response handlers for embedding PEP and Management API into any HTTP framework:
-
-```typescript
-import { handlePEPRequest, handleMgmtRequest } from "@gauth/core";
-
-// PEP endpoints:
-// GET  /gauth/pep/v1/health
-// POST /gauth/pep/v1/enforce
-// POST /gauth/pep/v1/enforce/batch
-// POST /gauth/pep/v1/policy
-
-// Management endpoints:
-// POST /gauth/mgmt/v1/mandates
-// GET  /gauth/mgmt/v1/mandates/:id
-// POST /gauth/mgmt/v1/mandates/:id/activate
-// POST /gauth/mgmt/v1/mandates/:id/revoke
-// POST /gauth/mgmt/v1/mandates/:id/suspend
-// POST /gauth/mgmt/v1/mandates/:id/resume
-// POST /gauth/mgmt/v1/mandates/:id/budget/top-up
-// POST /gauth/mgmt/v1/mandates/:id/ttl/extend
-```
+| Tariff | Description | Type C Access |
+|--------|-------------|---------------|
+| **O** (Open Core) | Self-hosted, rule-based PEP only | None |
+| **S** (Small) | Entry paid tier | None |
+| **M** (Medium) | Full platform with AI governance | Slots 5-6 |
+| **L** (Large) | Enterprise, all adapters | Slots 5-7 |
 
 ## License
 
-**MPL 2.0** — embedded into the Legal Terms of Gimel Foundation gGmbH i.G.
+This project is licensed under the [Mozilla Public License 2.0](LICENSE) with
+[Gimel Foundation Additional Terms](ADDITIONAL-TERMS.md).
 
-### Exclusions (NOT covered by MPL 2.0)
+### Open Core Exclusions
 
-The following are subject to **separate, proprietary licensing** by Gimel Foundation or Gimel Technologies GmbH:
+Three capabilities are excluded from the open-source license and are available
+only under the Gimel Technologies Terms of Service:
 
-- **AI-enabled Governance** — AI systems that autonomously control the authorization lifecycle
-- **Web3 Integration** — blockchain, DLT, Web3 tokens, smart contracts
-- **DNA-based Identities** — identity systems based on genetic data or genomic identifiers
-- **Post-Quantum Cryptography (PQC)** — quantum-resistant cryptographic schemes and their GAuth integration
+1. **AI-Enabled Governance** (Slot 5)
+2. **Web3 Identity Integration** (Slot 6)
+3. **DNA-Based Identities / PQC** (Slot 7)
 
-See [LICENSE](./LICENSE) for full terms.
+The full PEP enforcement pipeline (16 checks), Management API, and all Type A/B
+adapter interfaces are fully open-source. See [ADDITIONAL-TERMS.md](ADDITIONAL-TERMS.md)
+for details.
 
 Copyright (c) 2026 Gimel Foundation gGmbH i.G. | [gimelfoundation.com](https://gimelfoundation.com)

@@ -766,3 +766,122 @@ export interface MandateStore {
   query(query: MandateQueryRequest): Promise<MandateQueryResponse>;
   findActive(agentId: string, projectId: string): Promise<MandateDetail | null>;
 }
+
+export const TariffCode = z.enum(["O", "S", "M", "L"]);
+export type TariffCode = z.infer<typeof TariffCode>;
+
+export const LicenseType = z.enum(["mpl_2_0", "gimel_tos"]);
+export type LicenseType = z.infer<typeof LicenseType>;
+
+export const AdapterType = z.enum(["Internal", "A", "B", "C", "D"]);
+export type AdapterType = z.infer<typeof AdapterType>;
+
+export const ConnectorSlotName = z.enum([
+  "pdp",
+  "oauth_engine",
+  "foundry",
+  "wallet",
+  "ai_governance",
+  "web3_identity",
+  "dna_identity",
+]);
+export type ConnectorSlotName = z.infer<typeof ConnectorSlotName>;
+
+export const ConnectorSlotStatus = z.enum(["null", "pending", "active", "error"]);
+export type ConnectorSlotStatus = z.infer<typeof ConnectorSlotStatus>;
+
+export const AvailabilityCode = z.enum([
+  "active_always",
+  "gimel_or_user",
+  "user_provided_required",
+  "null_or_user",
+  "attested_gimel",
+  "null_or_attested_gimel",
+  "null",
+]);
+export type AvailabilityCode = z.infer<typeof AvailabilityCode>;
+
+export interface AdapterHealthResult {
+  healthy: boolean;
+  latencyMs: number;
+  details?: string;
+}
+
+export interface ConnectorSlotConfig {
+  slotName: ConnectorSlotName;
+  slotNumber: number;
+  adapterType: AdapterType;
+  attestationRequired: boolean;
+  mandatory: boolean;
+  nullBehavior: string;
+  timeoutMs: number;
+  maxRetries: number;
+}
+
+export const CONNECTOR_SLOT_CONFIGS: Record<ConnectorSlotName, ConnectorSlotConfig> = {
+  pdp: { slotName: "pdp", slotNumber: 1, adapterType: "Internal", attestationRequired: false, mandatory: true, nullBehavior: "Not allowed — mandatory", timeoutMs: 5000, maxRetries: 0 },
+  oauth_engine: { slotName: "oauth_engine", slotNumber: 2, adapterType: "A", attestationRequired: false, mandatory: true, nullBehavior: "Not allowed — mandatory", timeoutMs: 10000, maxRetries: 1 },
+  foundry: { slotName: "foundry", slotNumber: 3, adapterType: "B", attestationRequired: false, mandatory: false, nullBehavior: "Features unavailable; no agent execution", timeoutMs: 30000, maxRetries: 1 },
+  wallet: { slotName: "wallet", slotNumber: 4, adapterType: "B", attestationRequired: false, mandatory: false, nullBehavior: "W3C VC unavailable; JWT-only", timeoutMs: 10000, maxRetries: 1 },
+  ai_governance: { slotName: "ai_governance", slotNumber: 5, adapterType: "C", attestationRequired: true, mandatory: false, nullBehavior: "AI second-pass skipped; rule-based only", timeoutMs: 60000, maxRetries: 0 },
+  web3_identity: { slotName: "web3_identity", slotNumber: 6, adapterType: "C", attestationRequired: true, mandatory: false, nullBehavior: "Web3 features unavailable; standard identity", timeoutMs: 30000, maxRetries: 0 },
+  dna_identity: { slotName: "dna_identity", slotNumber: 7, adapterType: "C", attestationRequired: true, mandatory: false, nullBehavior: "DNA features unavailable; standard identity", timeoutMs: 30000, maxRetries: 0 },
+};
+
+export type DeploymentPolicyMatrix = Record<ConnectorSlotName, Record<TariffCode, AvailabilityCode>>;
+
+export const DEPLOYMENT_POLICY_MATRIX: DeploymentPolicyMatrix = {
+  pdp:            { O: "active_always", S: "active_always", M: "active_always", L: "active_always" },
+  oauth_engine:   { O: "user_provided_required", S: "gimel_or_user", M: "gimel_or_user", L: "gimel_or_user" },
+  foundry:        { O: "null_or_user", S: "gimel_or_user", M: "gimel_or_user", L: "gimel_or_user" },
+  wallet:         { O: "null_or_user", S: "gimel_or_user", M: "gimel_or_user", L: "gimel_or_user" },
+  ai_governance:  { O: "null", S: "null", M: "attested_gimel", L: "attested_gimel" },
+  web3_identity:  { O: "null", S: "null", M: "null_or_attested_gimel", L: "attested_gimel" },
+  dna_identity:   { O: "null", S: "null", M: "null", L: "attested_gimel" },
+};
+
+export interface TariffGateResult {
+  allowed: boolean;
+  reason?: string;
+  provenance?: string;
+  availability: AvailabilityCode;
+}
+
+export interface SealedAdapterManifest {
+  manifest_version: "1.0";
+  adapter_name: string;
+  adapter_type: "C";
+  adapter_version: string;
+  slot_name: "ai_governance" | "web3_identity" | "dna_identity";
+  namespace: string;
+  issued_at: string;
+  expires_at: string;
+  issuer: "gimel-foundation";
+  public_key: string;
+  capabilities?: string[];
+  checksum?: string;
+  signature: string;
+}
+
+export interface CustomerLicenseState {
+  license_type: LicenseType;
+  license_accepted_at: string | null;
+  license_version: string | null;
+  service_tos: Record<string, {
+    accepted: boolean;
+    version: string | null;
+    accepted_at: string | null;
+  }>;
+}
+
+export const DEFAULT_CUSTOMER_LICENSE_STATE: CustomerLicenseState = {
+  license_type: "mpl_2_0",
+  license_accepted_at: null,
+  license_version: null,
+  service_tos: {},
+};
+
+export interface S2SAuthHeaders {
+  "X-GAuth-Platform-Key": string;
+  "X-GAuth-HMAC-Signature": string;
+}

@@ -25,8 +25,11 @@ Located at `packages/gauth-core/`. TypeScript reference implementation of the GA
 - **Dependencies**: `jose` (JWT), `zod` (validation)
 - **Dev deps**: `tsup` (build), `vitest` (tests)
 - **Build**: `pnpm --filter @gauth/core run build` — produces ESM + CJS + DTS in `dist/`
-- **Test**: `pnpm --filter @gauth/core run test` — 98 unit tests across 6 suites
-- **Key modules**: `types.ts` (PoA schema, governance profiles), `pep.ts` (16-check PEP engine), `management.ts` (mandate lifecycle), `token.ts` (JWT), `adapters.ts` (sealed adapter registry), `http.ts` (HTTP bindings)
+- **Test**: `pnpm --filter @gauth/core run test` — 161 unit tests across 6 suites
+- **Key modules**: `types.ts` (PoA schema, governance profiles, 7-slot connector model, tariff codes), `pep.ts` (16-check PEP engine), `management.ts` (mandate lifecycle), `token.ts` (JWT RS256/ES256), `adapters.ts` (7-slot connector registry, all adapter interfaces, tariff gating, S2S auth), `http.ts` (HTTP bindings)
+- **Adapter Types**: Internal (PDP), A (OAuth Engine), B (Foundry, Wallet), C (Governance, Web3, DNA — sealed/proprietary), D (Billing — internal)
+- **Tariff Model**: O (Open Core), S (Small), M (Medium), L (Large) — controls adapter slot availability
+- **Legal Files**: `LICENSE` (MPL 2.0 + Gimel Foundation Supplementary Terms), `ADDITIONAL-TERMS.md` (exclusions)
 
 ## Key Commands
 

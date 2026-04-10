@@ -4,60 +4,114 @@ import type {
   MandateDetail,
   GovernanceProfile,
   GovernanceProfileCeiling,
+  ConnectorSlotName,
+  ConnectorSlotStatus,
+  TariffCode,
+  AvailabilityCode,
+  AdapterHealthResult,
+  TariffGateResult,
+  SealedAdapterManifest,
+  CustomerLicenseState,
 } from "./types.js";
-import { DEFAULT_GOVERNANCE_CEILINGS } from "./types.js";
+import {
+  DEFAULT_GOVERNANCE_CEILINGS,
+  CONNECTOR_SLOT_CONFIGS,
+  DEPLOYMENT_POLICY_MATRIX,
+  DEFAULT_CUSTOMER_LICENSE_STATE,
+} from "./types.js";
+
+export interface PolicyDecisionAdapter {
+  readonly adapterType: "Internal";
+  readonly name: string;
+  evaluateMandate(mandate: { id: string; clientId: string; scopes: string[]; [key: string]: unknown }, profile: { id: string; name: string; [key: string]: unknown }): Promise<{ allowed: boolean; reason: string; violations?: string[] }>;
+  validateCeilings(mandate: { id: string; clientId: string; scopes: string[]; [key: string]: unknown }, profile: { id: string; name: string; [key: string]: unknown }): Promise<{ valid: boolean; violations?: string[] }>;
+  evaluateAction(action: { verb: string; resource: string; [key: string]: unknown }, mandate: { id: string; clientId: string; scopes: string[]; [key: string]: unknown }): Promise<{ allowed: boolean; reason: string; constraints?: Record<string, unknown> }>;
+  adjustSeverity(baseSeverity: string, profile: { id: string; name: string; [key: string]: unknown }): string;
+  healthCheck(): Promise<AdapterHealthResult>;
+}
 
 export interface OAuthEngineAdapter {
   readonly adapterType: "A";
   readonly name: string;
   readonly packageNamespace: string;
-
-  issueToken(poa: PoACredential, options: Record<string, unknown>): Promise<string>;
-  introspectToken(token: string): Promise<{ active: boolean; claims?: GAuthJWTClaims }>;
-  revokeToken(token: string): Promise<void>;
-  getJWKS(): Promise<Record<string, unknown>>;
+  issueToken(claims: Record<string, unknown>, options: { ttl?: number; scopes?: string[]; [key: string]: unknown }): Promise<{ token: string; expiresAt: string }>;
+  validateToken(token: string): Promise<{ valid: boolean; claims?: Record<string, unknown>; error?: string }>;
+  revokeToken(tokenId: string, reason: string): Promise<{ revoked: boolean; tokenId: string }>;
+  getJWKS(): Promise<{ keys: Record<string, unknown>[] }>;
+  introspect(token: string): Promise<{ active: boolean; claims?: Record<string, unknown> }>;
+  beforeTokenIssuance(context: { clientId: string; subject: string; scopes: string[]; [key: string]: unknown }): Promise<Record<string, unknown>>;
+  afterTokenIssuance(token: { token: string; expiresAt: string }, context: { clientId: string; subject: string; scopes: string[]; [key: string]: unknown }): Promise<void>;
+  healthCheck(): Promise<AdapterHealthResult>;
 }
 
 export interface FoundryAdapter {
   readonly adapterType: "B";
   readonly name: string;
   readonly packageNamespace: string;
-
-  executeAction(action: string, resource: string, parameters: Record<string, unknown>): Promise<{ success: boolean; result?: unknown; error?: string }>;
-  validateEnvironment(): Promise<{ valid: boolean; capabilities: string[] }>;
+  executeAction(action: { verb: string; resource: string; [key: string]: unknown }, mandate: { id: string; clientId: string; scopes: string[]; [key: string]: unknown }): Promise<{ success: boolean; result?: unknown; error?: string }>;
+  getAgentCatalog(): Promise<Array<{ id: string; name: string; capabilities: string[] }>>;
+  getActionReport(actionId: string): Promise<{ actionId: string; status: string; result?: unknown }>;
+  validateSandbox(agentId: string, requirements: Record<string, unknown>): Promise<{ valid: boolean; issues?: string[] }>;
+  healthCheck(): Promise<AdapterHealthResult>;
 }
 
-export interface AIEnrichmentAdapter {
+export interface WalletAdapter {
+  readonly adapterType: "B";
+  readonly name: string;
+  readonly packageNamespace: string;
+  storeCredential(credential: Record<string, unknown>): Promise<{ id: string; stored: boolean }>;
+  presentCredential(query: Record<string, unknown>): Promise<Record<string, unknown>>;
+  listCredentials(filter?: Record<string, unknown>): Promise<Array<{ id: string; type: string; issuer: string }>>;
+  deleteCredential(credentialId: string): Promise<{ id: string; deleted: boolean }>;
+  generateSelectiveDisclosure(credential: Record<string, unknown>, disclosureFrame: Record<string, unknown>): Promise<{ token: string }>;
+  healthCheck(): Promise<AdapterHealthResult>;
+}
+
+export interface GovernanceAdapter {
   readonly adapterType: "C";
   readonly name: string;
   readonly packageNamespace: string;
-
-  enrichMandate(mandate: MandateDetail): Promise<{ enriched: boolean; suggestions?: Record<string, unknown>[] }>;
-  assessRisk(mandate: MandateDetail): Promise<{ risk_score: number; risk_factors: string[] }>;
+  checkAccess(request: { requestId: string; operation: string; resource: string; actor: { clientId: string; clientType: string }; context: Record<string, unknown> }): Promise<{ allowed: boolean; reason: string; recommendations?: string[] }>;
+  getRecommendations(context: Record<string, unknown>): Promise<Array<{ id: string; recommendation: string; severity: string }>>;
+  healthCheck(): Promise<AdapterHealthResult>;
 }
 
-export interface RiskScoringAdapter {
+export interface Web3IdentityAdapter {
   readonly adapterType: "C";
   readonly name: string;
   readonly packageNamespace: string;
-
-  scoreMandate(mandate: MandateDetail): Promise<{ score: number; breakdown: Record<string, number>; recommendations: string[] }>;
+  resolveIdentity(identifier: string): Promise<{ identifier: string; resolved: boolean; [key: string]: unknown } | null>;
+  verifyCredential(credential: unknown): Promise<{ verified: boolean; details?: string }>;
+  healthCheck(): Promise<AdapterHealthResult>;
 }
 
-export interface RegulatoryReasoningAdapter {
+export interface DNAIdentityAdapter {
+  readonly adapterType: "C";
+  readonly name: string;
+  readonly packageNamespace: string;
+  resolveIdentity(identifier: string): Promise<{ identifier: string; resolved: boolean; [key: string]: unknown } | null>;
+  verifyBiometric(data: unknown): Promise<{ verified: boolean; details?: string }>;
+  healthCheck(): Promise<AdapterHealthResult>;
+}
+
+export interface BillingAdapter {
   readonly adapterType: "D";
   readonly name: string;
-  readonly packageNamespace: string;
-
-  evaluateCompliance(mandate: MandateDetail, regulations: string[]): Promise<{ compliant: boolean; violations: string[]; recommendations: string[] }>;
+  checkCredits(organizationId: string, operation: string): Promise<{ allowed: boolean; balance: number; cost: number }>;
+  recordUsage(organizationId: string, operation: string, metadata?: Record<string, unknown>): Promise<void>;
+  getBalance(organizationId: string): Promise<{ balanceCents: number; currency: string }>;
+  healthCheck(): Promise<AdapterHealthResult>;
 }
 
 export type GAuthAdapter =
+  | PolicyDecisionAdapter
   | OAuthEngineAdapter
   | FoundryAdapter
-  | AIEnrichmentAdapter
-  | RiskScoringAdapter
-  | RegulatoryReasoningAdapter;
+  | WalletAdapter
+  | GovernanceAdapter
+  | Web3IdentityAdapter
+  | DNAIdentityAdapter
+  | BillingAdapter;
 
 export interface AdapterRegistrationOptions {
   trustedNamespaces?: string[];
@@ -90,7 +144,7 @@ export class AdapterRegistry {
   }
 
   async register(adapter: GAuthAdapter, signature?: string): Promise<void> {
-    const ns = adapter.packageNamespace;
+    const ns = "packageNamespace" in adapter ? (adapter as { packageNamespace: string }).packageNamespace : "@gimel/internal";
 
     const isTrusted = this.trustedNamespaces.some((trusted) => ns.startsWith(trusted));
     if (!isTrusted) {
@@ -143,6 +197,10 @@ export class AdapterRegistry {
     return this.get<FoundryAdapter>("B", name);
   }
 
+  getWallet(name: string): WalletAdapter | undefined {
+    return this.get<WalletAdapter>("B", name);
+  }
+
   list(): Array<{ type: string; name: string; namespace: string; registeredAt: string }> {
     return Array.from(this.adapters.entries()).map(([key, reg]) => ({
       type: reg.adapter.adapterType,
@@ -164,23 +222,213 @@ export class AdapterRegistrationError extends Error {
   }
 }
 
+export interface ConnectorSlotState {
+  slotName: ConnectorSlotName;
+  status: ConnectorSlotStatus;
+  implementationLabel: string;
+  adapter: GAuthAdapter | null;
+  attestationSatisfied: boolean;
+  registeredAt: string | null;
+  licenseType: string | null;
+  licenseAcceptedAt: string | null;
+  licenseVersion: string | null;
+}
+
+export class ConnectorSlotRegistry {
+  private slots = new Map<ConnectorSlotName, ConnectorSlotState>();
+  private tariff: TariffCode;
+
+  constructor(tariff: TariffCode = "O") {
+    this.tariff = tariff;
+    const slotNames: ConnectorSlotName[] = ["pdp", "oauth_engine", "foundry", "wallet", "ai_governance", "web3_identity", "dna_identity"];
+    for (const name of slotNames) {
+      this.slots.set(name, {
+        slotName: name,
+        status: "null",
+        implementationLabel: "None",
+        adapter: null,
+        attestationSatisfied: false,
+        registeredAt: null,
+        licenseType: null,
+        licenseAcceptedAt: null,
+        licenseVersion: null,
+      });
+    }
+  }
+
+  checkTariffGate(slotName: ConnectorSlotName): TariffGateResult {
+    const availability = DEPLOYMENT_POLICY_MATRIX[slotName][this.tariff];
+
+    if (availability === "null") {
+      return { allowed: false, reason: "Slot not available for tariff", availability };
+    }
+
+    const config = CONNECTOR_SLOT_CONFIGS[slotName];
+    if (config.adapterType === "C" && (this.tariff === "O" || this.tariff === "S")) {
+      return { allowed: false, reason: "Type C requires tariff M or higher", availability };
+    }
+
+    const slot = this.slots.get(slotName)!;
+
+    switch (availability) {
+      case "active_always":
+        return { allowed: true, provenance: "gimel_managed", availability };
+      case "gimel_or_user":
+        return { allowed: true, provenance: "gimel_or_user", availability };
+      case "user_provided_required":
+        return { allowed: true, provenance: "user_must_provide", availability };
+      case "null_or_user":
+        return { allowed: true, provenance: "user_optional", availability };
+      case "attested_gimel":
+        if (config.attestationRequired && !slot.attestationSatisfied) {
+          return { allowed: false, reason: "Attestation required", availability };
+        }
+        return { allowed: true, provenance: "attested_gimel", availability };
+      case "null_or_attested_gimel":
+        if (config.attestationRequired && !slot.attestationSatisfied) {
+          return { allowed: true, provenance: "null_fallback_until_attested", availability };
+        }
+        return { allowed: true, provenance: "attested_gimel", availability };
+      default:
+        return { allowed: false, reason: "Unknown availability", availability };
+    }
+  }
+
+  register(slotName: ConnectorSlotName, adapter: GAuthAdapter, implementationLabel: string): { success: boolean; error?: string } {
+    const gate = this.checkTariffGate(slotName);
+    if (!gate.allowed && gate.availability === "null") {
+      return { success: false, error: `Slot ${slotName} is not available for tariff ${this.tariff}` };
+    }
+
+    const config = CONNECTOR_SLOT_CONFIGS[slotName];
+    const slot = this.slots.get(slotName)!;
+
+    if (config.adapterType === "C" && !slot.attestationSatisfied) {
+      slot.adapter = adapter;
+      slot.implementationLabel = implementationLabel;
+      slot.registeredAt = new Date().toISOString();
+      slot.status = "pending";
+      return { success: true };
+    }
+
+    slot.adapter = adapter;
+    slot.implementationLabel = implementationLabel;
+    slot.registeredAt = new Date().toISOString();
+    slot.status = "active";
+    return { success: true };
+  }
+
+  unregister(slotName: ConnectorSlotName): { success: boolean; error?: string } {
+    const config = CONNECTOR_SLOT_CONFIGS[slotName];
+    if (config.mandatory) {
+      return { success: false, error: `Cannot unregister ${slotName} — it is mandatory` };
+    }
+
+    const slot = this.slots.get(slotName)!;
+    slot.adapter = null;
+    slot.implementationLabel = "None";
+    slot.status = "null";
+    slot.attestationSatisfied = false;
+    slot.registeredAt = null;
+    slot.licenseType = null;
+    slot.licenseAcceptedAt = null;
+    slot.licenseVersion = null;
+    return { success: true };
+  }
+
+  satisfyAttestation(slotName: ConnectorSlotName): { success: boolean; error?: string } {
+    const config = CONNECTOR_SLOT_CONFIGS[slotName];
+    if (!config.attestationRequired) {
+      return { success: false, error: `Slot ${slotName} does not require attestation` };
+    }
+
+    const slot = this.slots.get(slotName)!;
+    slot.attestationSatisfied = true;
+    if (slot.adapter && slot.status === "pending") {
+      slot.status = "active";
+    }
+    return { success: true };
+  }
+
+  acceptLicense(slotName: ConnectorSlotName, licenseVersion: string): { success: boolean; error?: string } {
+    const slot = this.slots.get(slotName)!;
+    slot.licenseType = "gimel_tos";
+    slot.licenseAcceptedAt = new Date().toISOString();
+    slot.licenseVersion = licenseVersion;
+    return { success: true };
+  }
+
+  getSlotStatus(slotName: ConnectorSlotName): ConnectorSlotState {
+    return { ...this.slots.get(slotName)! };
+  }
+
+  getAllSlotStatuses(): ConnectorSlotState[] {
+    return Array.from(this.slots.values()).map((s) => ({ ...s }));
+  }
+
+  getTariff(): TariffCode {
+    return this.tariff;
+  }
+}
+
+export class NoOpPolicyDecisionAdapter implements PolicyDecisionAdapter {
+  readonly adapterType = "Internal" as const;
+  readonly name = "noop-pdp";
+
+  async evaluateMandate(): Promise<{ allowed: boolean; reason: string }> {
+    return { allowed: true, reason: "NoOp PDP — always permits" };
+  }
+
+  async validateCeilings(): Promise<{ valid: boolean }> {
+    return { valid: true };
+  }
+
+  async evaluateAction(): Promise<{ allowed: boolean; reason: string }> {
+    return { allowed: true, reason: "NoOp PDP — always permits" };
+  }
+
+  adjustSeverity(baseSeverity: string): string {
+    return baseSeverity;
+  }
+
+  async healthCheck(): Promise<AdapterHealthResult> {
+    return { healthy: true, latencyMs: 0, details: "NoOp PDP" };
+  }
+}
+
 export class NoOpOAuthEngineAdapter implements OAuthEngineAdapter {
   readonly adapterType = "A" as const;
   readonly name = "noop-oauth";
   readonly packageNamespace = "@gauth/adapters";
 
-  async issueToken(): Promise<string> {
+  async issueToken(): Promise<{ token: string; expiresAt: string }> {
     throw new Error("NoOpOAuthEngineAdapter: issueToken not implemented. Register a real OAuth engine adapter.");
   }
 
-  async introspectToken(): Promise<{ active: boolean }> {
+  async validateToken(): Promise<{ valid: boolean; error: string }> {
+    return { valid: false, error: "NoOp adapter" };
+  }
+
+  async revokeToken(_tokenId: string): Promise<{ revoked: boolean; tokenId: string }> {
+    return { revoked: false, tokenId: _tokenId ?? "" };
+  }
+
+  async getJWKS(): Promise<{ keys: Record<string, unknown>[] }> {
+    return { keys: [] };
+  }
+
+  async introspect(): Promise<{ active: boolean }> {
     return { active: false };
   }
 
-  async revokeToken(): Promise<void> {}
+  async beforeTokenIssuance(): Promise<Record<string, unknown>> {
+    return {};
+  }
 
-  async getJWKS(): Promise<Record<string, unknown>> {
-    return { keys: [] };
+  async afterTokenIssuance(): Promise<void> {}
+
+  async healthCheck(): Promise<AdapterHealthResult> {
+    return { healthy: false, latencyMs: 0, details: "NoOp OAuth — no real engine configured" };
   }
 }
 
@@ -193,45 +441,165 @@ export class NoOpFoundryAdapter implements FoundryAdapter {
     return { success: false, error: "NoOpFoundryAdapter: no foundry connected." };
   }
 
-  async validateEnvironment(): Promise<{ valid: boolean; capabilities: string[] }> {
-    return { valid: false, capabilities: [] };
+  async getAgentCatalog(): Promise<Array<{ id: string; name: string; capabilities: string[] }>> {
+    return [];
+  }
+
+  async getActionReport(_actionId: string): Promise<{ actionId: string; status: string }> {
+    return { actionId: _actionId ?? "", status: "not_found" };
+  }
+
+  async validateSandbox(): Promise<{ valid: boolean; issues: string[] }> {
+    return { valid: false, issues: ["No foundry connected"] };
+  }
+
+  async healthCheck(): Promise<AdapterHealthResult> {
+    return { healthy: false, latencyMs: 0, details: "NoOp Foundry — no foundry connected" };
   }
 }
 
-export class NoOpAIEnrichmentAdapter implements AIEnrichmentAdapter {
-  readonly adapterType = "C" as const;
-  readonly name = "noop-ai-enrichment";
+export class NoOpWalletAdapter implements WalletAdapter {
+  readonly adapterType = "B" as const;
+  readonly name = "noop-wallet";
   readonly packageNamespace = "@gauth/adapters";
 
-  async enrichMandate(): Promise<{ enriched: boolean; suggestions?: Record<string, unknown>[] }> {
-    return { enriched: false };
+  async storeCredential(): Promise<{ id: string; stored: boolean }> {
+    throw new Error("NoOpWalletAdapter: wallet not connected.");
   }
 
-  async assessRisk(): Promise<{ risk_score: number; risk_factors: string[] }> {
-    return { risk_score: 0, risk_factors: [] };
+  async presentCredential(): Promise<Record<string, unknown>> {
+    throw new Error("NoOpWalletAdapter: wallet not connected.");
+  }
+
+  async listCredentials(): Promise<Array<{ id: string; type: string; issuer: string }>> {
+    return [];
+  }
+
+  async deleteCredential(): Promise<{ id: string; deleted: boolean }> {
+    throw new Error("NoOpWalletAdapter: wallet not connected.");
+  }
+
+  async generateSelectiveDisclosure(): Promise<{ token: string }> {
+    throw new Error("NoOpWalletAdapter: wallet not connected.");
+  }
+
+  async healthCheck(): Promise<AdapterHealthResult> {
+    return { healthy: false, latencyMs: 0, details: "NoOp Wallet — no wallet connected" };
   }
 }
 
-export class NoOpRiskScoringAdapter implements RiskScoringAdapter {
+export class NoOpGovernanceAdapter implements GovernanceAdapter {
   readonly adapterType = "C" as const;
-  readonly name = "noop-risk-scoring";
-  readonly packageNamespace = "@gauth/adapters";
+  readonly name = "noop-ai-governance";
+  readonly packageNamespace = "@gimel/ai-governance";
 
-  async scoreMandate(): Promise<{ score: number; breakdown: Record<string, number>; recommendations: string[] }> {
-    return { score: 0, breakdown: {}, recommendations: [] };
+  async checkAccess(): Promise<{ allowed: boolean; reason: string }> {
+    return { allowed: true, reason: "NoOp Governance — AI second-pass skipped, rule-based only" };
+  }
+
+  async getRecommendations(): Promise<Array<{ id: string; recommendation: string; severity: string }>> {
+    return [];
+  }
+
+  async healthCheck(): Promise<AdapterHealthResult> {
+    return { healthy: false, latencyMs: 0, details: "NoOp Governance — AI governance not active" };
   }
 }
 
-export class NoOpRegulatoryReasoningAdapter implements RegulatoryReasoningAdapter {
+export class NoOpWeb3IdentityAdapter implements Web3IdentityAdapter {
+  readonly adapterType = "C" as const;
+  readonly name = "noop-web3-identity";
+  readonly packageNamespace = "@gimel/web3-identity";
+
+  async resolveIdentity(): Promise<null> {
+    return null;
+  }
+
+  async verifyCredential(): Promise<{ verified: boolean; details: string }> {
+    return { verified: false, details: "NoOp Web3 — Web3 identity not active" };
+  }
+
+  async healthCheck(): Promise<AdapterHealthResult> {
+    return { healthy: false, latencyMs: 0, details: "NoOp Web3 — Web3 identity not active" };
+  }
+}
+
+export class NoOpDNAIdentityAdapter implements DNAIdentityAdapter {
+  readonly adapterType = "C" as const;
+  readonly name = "noop-dna-identity";
+  readonly packageNamespace = "@gimel/dna-identity";
+
+  async resolveIdentity(): Promise<null> {
+    return null;
+  }
+
+  async verifyBiometric(): Promise<{ verified: boolean; details: string }> {
+    return { verified: false, details: "NoOp DNA — DNA identity not active" };
+  }
+
+  async healthCheck(): Promise<AdapterHealthResult> {
+    return { healthy: false, latencyMs: 0, details: "NoOp DNA — DNA identity not active" };
+  }
+}
+
+export class NoOpBillingAdapter implements BillingAdapter {
   readonly adapterType = "D" as const;
-  readonly name = "noop-regulatory";
-  readonly packageNamespace = "@gauth/adapters";
+  readonly name = "noop-billing";
 
-  async evaluateCompliance(): Promise<{ compliant: boolean; violations: string[]; recommendations: string[] }> {
-    return { compliant: true, violations: [], recommendations: ["Register a production RegulatoryReasoningAdapter for real compliance checks."] };
+  async checkCredits(): Promise<{ allowed: boolean; balance: number; cost: number }> {
+    return { allowed: true, balance: 0, cost: 0 };
+  }
+
+  async recordUsage(): Promise<void> {}
+
+  async getBalance(): Promise<{ balanceCents: number; currency: string }> {
+    return { balanceCents: 0, currency: "USD" };
+  }
+
+  async healthCheck(): Promise<AdapterHealthResult> {
+    return { healthy: true, latencyMs: 0, details: "NoOp Billing — inactive (no Gimel-hosted services)" };
   }
 }
 
 export function createDefaultRegistry(): AdapterRegistry {
   return new AdapterRegistry();
+}
+
+export function computeS2SHeaders(
+  body: unknown,
+  platformKey: string,
+  serviceSecret: string,
+): { "X-GAuth-Platform-Key": string; "X-GAuth-HMAC-Signature": string } {
+  const payload = typeof body === "string" ? body : JSON.stringify(body);
+  let signature: string;
+  try {
+    const { createHmac } = require("crypto");
+    const hmac = createHmac("sha256", serviceSecret);
+    hmac.update(payload);
+    signature = "sha256=" + hmac.digest("hex");
+  } catch {
+    signature = "sha256=unavailable";
+  }
+  return {
+    "X-GAuth-Platform-Key": platformKey,
+    "X-GAuth-HMAC-Signature": signature,
+  };
+}
+
+export function verifyS2SSignature(
+  body: unknown,
+  expectedSignature: string,
+  serviceSecret: string,
+): boolean {
+  const payload = typeof body === "string" ? body : JSON.stringify(body);
+  try {
+    const { createHmac, timingSafeEqual } = require("crypto");
+    const hmac = createHmac("sha256", serviceSecret);
+    hmac.update(payload);
+    const computed = "sha256=" + hmac.digest("hex");
+    if (computed.length !== expectedSignature.length) return false;
+    return timingSafeEqual(Buffer.from(computed), Buffer.from(expectedSignature));
+  } catch {
+    return false;
+  }
 }

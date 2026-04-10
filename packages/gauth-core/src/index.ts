@@ -46,6 +46,15 @@ export {
   GOVERNANCE_RESTRICTED_TRANSACTIONS,
   GOVERNANCE_RESTRICTED_DECISIONS,
   ApprovalEvidence,
+  TariffCode,
+  LicenseType,
+  AdapterType,
+  ConnectorSlotName,
+  ConnectorSlotStatus,
+  AvailabilityCode,
+  CONNECTOR_SLOT_CONFIGS,
+  DEPLOYMENT_POLICY_MATRIX,
+  DEFAULT_CUSTOMER_LICENSE_STATE,
 } from "./types.js";
 
 export type {
@@ -85,6 +94,13 @@ export type {
   GovernanceProfileCeiling,
   GAuthJWTClaims,
   MandateStore,
+  AdapterHealthResult,
+  ConnectorSlotConfig,
+  DeploymentPolicyMatrix,
+  TariffGateResult,
+  SealedAdapterManifest,
+  CustomerLicenseState,
+  S2SAuthHeaders,
 } from "./types.js";
 
 export {
@@ -120,21 +136,31 @@ export {
 export {
   AdapterRegistry,
   AdapterRegistrationError,
+  ConnectorSlotRegistry,
+  NoOpPolicyDecisionAdapter,
   NoOpOAuthEngineAdapter,
   NoOpFoundryAdapter,
-  NoOpAIEnrichmentAdapter,
-  NoOpRiskScoringAdapter,
-  NoOpRegulatoryReasoningAdapter,
+  NoOpWalletAdapter,
+  NoOpGovernanceAdapter,
+  NoOpWeb3IdentityAdapter,
+  NoOpDNAIdentityAdapter,
+  NoOpBillingAdapter,
   createDefaultRegistry,
+  computeS2SHeaders,
+  verifyS2SSignature,
 } from "./adapters.js";
 export type {
+  PolicyDecisionAdapter,
   OAuthEngineAdapter,
   FoundryAdapter,
-  AIEnrichmentAdapter,
-  RiskScoringAdapter,
-  RegulatoryReasoningAdapter,
+  WalletAdapter,
+  GovernanceAdapter,
+  Web3IdentityAdapter,
+  DNAIdentityAdapter,
+  BillingAdapter,
   GAuthAdapter,
   AdapterRegistrationOptions,
+  ConnectorSlotState,
 } from "./adapters.js";
 
 export {
