@@ -484,7 +484,7 @@ function runCHK07(parsed: ParsedCredential, request: EnforcementRequest): { chec
 
   for (const denied of deniedPaths) {
     if (matchGlob(denied, resource)) {
-      return { check: makeCheckResult("CHK-07", "Path", "fail", `Path '${resource}' is explicitly denied by pattern '${denied}'.`) };
+      return { check: makeCheckResult("CHK-07", "Path", "fail", `Path '${resource}' is explicitly denied by pattern '${denied}'.`, VIOLATION_CODES.PATH_DENIED) };
     }
   }
 
@@ -494,7 +494,7 @@ function runCHK07(parsed: ParsedCredential, request: EnforcementRequest): { chec
 
   const allowed = allowedPaths.some((p) => matchGlob(p, resource));
   if (!allowed) {
-    return { check: makeCheckResult("CHK-07", "Path", "fail", `Path '${resource}' not in allowed paths.`) };
+    return { check: makeCheckResult("CHK-07", "Path", "fail", `Path '${resource}' not in allowed paths.`, VIOLATION_CODES.PATH_NOT_ALLOWED) };
   }
 
   return { check: makeCheckResult("CHK-07", "Path", "pass", `Path '${resource}' allowed.`) };

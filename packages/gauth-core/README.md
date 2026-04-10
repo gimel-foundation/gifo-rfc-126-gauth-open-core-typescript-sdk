@@ -62,26 +62,6 @@ Requires Node.js >= 18.0.0.
 
 ## Quick Start
 
-```typescript
-import { GAuthClient } from "@gauth/core";
-
-const client = new GAuthClient({ baseUrl: "https://gauth.example.com" });
-
-const decision = await client.pep.enforce({
-  credential: myPoaToken,
-  action: { verb: "urn:gauth:verb:core:file:modify", resource: "src/main.ts" },
-  agent: { agentId: "agent_456", sessionId: "sess_789" },
-});
-
-if (decision.decision === "PERMIT") {
-  proceed();
-} else if (decision.decision === "CONSTRAIN") {
-  proceedWith(decision.enforcedConstraints);
-} else {
-  block(decision.violations);
-}
-```
-
 ### Enforce Actions (PEP)
 
 ```typescript

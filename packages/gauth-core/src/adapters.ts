@@ -572,14 +572,9 @@ export function computeS2SHeaders(
   serviceSecret: string,
 ): { "X-GAuth-Platform-Key": string; "X-GAuth-HMAC-Signature": string } {
   const payload = typeof body === "string" ? body : JSON.stringify(body);
-  let signature: string;
-  try {
-    const hmac = createHmac("sha256", serviceSecret);
-    hmac.update(payload);
-    signature = "sha256=" + hmac.digest("hex");
-  } catch {
-    signature = "sha256=unavailable";
-  }
+  const hmac = createHmac("sha256", serviceSecret);
+  hmac.update(payload);
+  const signature = "sha256=" + hmac.digest("hex");
   return {
     "X-GAuth-Platform-Key": platformKey,
     "X-GAuth-HMAC-Signature": signature,
