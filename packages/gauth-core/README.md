@@ -1,5 +1,7 @@
 # @gauth/core
 
+**Version 0.91.0 — Public Preview**
+
 **GAuth Open Core TypeScript SDK** — the reference implementation of the GAuth authorization protocol for AI agent governance.
 
 Implements [GiFo-RFCs 0110/0111, 0115, 0116 v2.2, 0117 v1.2, 0118 v1.1](https://gimelfoundation.com/rfcs) from Gimel Foundation.
@@ -151,10 +153,19 @@ GAuth supports three deployment patterns:
 | **M** (Medium) | Full platform with AI governance | Slots 5-6 |
 | **L** (Large) | Enterprise, all adapters | Slots 5-7 |
 
-## License
+## License — Dual-Layer Coexistence
 
-This project is licensed under the [Mozilla Public License 2.0](LICENSE) with
-[Gimel Foundation Additional Terms](ADDITIONAL-TERMS.md).
+This SDK uses a dual-layer licensing model. Both licenses coexist — they do not replace each other:
+
+| Layer | License | Scope | Revocable? |
+|-------|---------|-------|------------|
+| SDK source code | MPL 2.0 | File-level copyleft on SDK files; your own files in separate modules remain under your chosen license | No — irrevocable |
+| Proprietary Gimel services | Gimel Technologies ToS | Governs access to Gimel-hosted services (Auth-as-a-Service, Foundry, AI Governance, Web3 Identity, DNA Identity) | Yes — service relationship |
+| Open specifications (RFCs) | Apache 2.0 | Interoperability protocols (RFC 0116, 0117, 0118) | No — irrevocable |
+
+**In practice:** You may run the SDK in pure Open Core mode (MPL 2.0 only, self-hosted, no Gimel services) indefinitely. If you choose to use proprietary Gimel services, the Gimel Technologies ToS applies *in addition to* MPL 2.0 — not as a replacement. Your SDK code and modifications to SDK files remain MPL 2.0 regardless.
+
+See [LICENSE](LICENSE) and [ADDITIONAL-TERMS.md](ADDITIONAL-TERMS.md) for the full legal text.
 
 ### Open Core Exclusions
 
@@ -166,7 +177,8 @@ only under the Gimel Technologies Terms of Service:
 3. **DNA-Based Identities / PQC** (Slot 7)
 
 The full PEP enforcement pipeline (16 checks), Management API, and all Type A/B
-adapter interfaces are fully open-source. See [ADDITIONAL-TERMS.md](ADDITIONAL-TERMS.md)
-for details.
+adapter interfaces are fully open-source under MPL 2.0.
+
+Contributions to Excluded Components require a separate CLA. Contact: info@gimelid.com
 
 Copyright (c) 2026 Gimel Foundation gGmbH i.G. | [gimelfoundation.com](https://gimelfoundation.com)

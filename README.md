@@ -1,5 +1,7 @@
 # GAuth Open Core SDK
 
+**Version 0.91.0 — Public Preview**
+
 **Reference implementation of the GAuth authorization protocol for AI agent governance.**
 
 Implements [GiFo-RFCs 0110/0111, 0115, 0116 v2.2, 0117 v1.2, 0118 v1.1](https://gimelfoundation.com/rfcs) from Gimel Foundation.
@@ -122,9 +124,19 @@ See [CONTRIBUTING.md](packages/gauth-core/CONTRIBUTING.md) for the branch model,
 
 All contributions enter `main` through reviewed pull requests. The architecture team works on the `replit` integration branch; community contributors work on `feature/*` and `fix/*` branches.
 
-## License
+## License — Dual-Layer Coexistence
 
-This project is licensed under the [Mozilla Public License 2.0](packages/gauth-core/LICENSE) with [Gimel Foundation Additional Terms](packages/gauth-core/ADDITIONAL-TERMS.md).
+This SDK uses a dual-layer licensing model. Both licenses coexist — they do not replace each other:
+
+| Layer | License | Scope | Revocable? |
+|-------|---------|-------|------------|
+| SDK source code | MPL 2.0 | File-level copyleft on SDK files; your own files in separate modules remain under your chosen license | No — irrevocable |
+| Proprietary Gimel services | Gimel Technologies ToS | Governs access to Gimel-hosted services (Auth-as-a-Service, Foundry, AI Governance, Web3 Identity, DNA Identity) | Yes — service relationship |
+| Open specifications (RFCs) | Apache 2.0 | Interoperability protocols (RFC 0116, 0117, 0118) | No — irrevocable |
+
+**In practice:** You may run the SDK in pure Open Core mode (MPL 2.0 only, self-hosted, no Gimel services) indefinitely. If you choose to use proprietary Gimel services, the Gimel Technologies ToS applies *in addition to* MPL 2.0 — not as a replacement. Your SDK code and modifications to SDK files remain MPL 2.0 regardless.
+
+See [LICENSE](packages/gauth-core/LICENSE) and [ADDITIONAL-TERMS.md](packages/gauth-core/ADDITIONAL-TERMS.md) for the full legal text.
 
 ### Open Core Exclusions
 

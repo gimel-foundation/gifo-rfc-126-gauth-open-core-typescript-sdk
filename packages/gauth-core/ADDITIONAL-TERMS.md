@@ -64,14 +64,31 @@ includes the interface definitions so that the system can correctly handle the
 
 ---
 
+## Dual-Layer Licensing Model
+
+This SDK uses a dual-layer licensing model. Both licenses coexist — they do not
+replace each other:
+
+| Layer | License | Scope | Revocable? |
+|-------|---------|-------|------------|
+| SDK source code | MPL 2.0 | File-level copyleft on SDK files; your own files in separate modules remain under your chosen license | No — irrevocable |
+| Proprietary Gimel services | Gimel Technologies ToS | Governs access to Gimel-hosted services (Auth-as-a-Service, Foundry, AI Governance, Web3 Identity, DNA Identity) | Yes — service relationship |
+| Open specifications (RFCs) | Apache 2.0 | Interoperability protocols (RFC 0116, 0117, 0118) | No — irrevocable |
+
+**In practice:** You may run the SDK in pure Open Core mode (MPL 2.0 only,
+self-hosted, no Gimel services) indefinitely. If you choose to use proprietary
+Gimel services, the Gimel Technologies ToS applies *in addition to* MPL 2.0 —
+not as a replacement. Your SDK code and modifications to SDK files remain MPL 2.0
+regardless.
+
 ## Legal Framework
 
 **Gimel Foundation gGmbH i.G.** publishes the GiFo-RFCs and the open-source project.
 The Gimel Foundation Legal Terms apply to all use of GAuth.
 
 **Gimel Technologies GmbH** operates proprietary services. When a user opts into
-proprietary services (including Excluded Components), a license swap occurs:
-the user transitions from MPL 2.0 to the Gimel Technologies Terms of Service.
+proprietary services (including Excluded Components), the Gimel Technologies
+Terms of Service apply in addition to MPL 2.0.
 
 The Excluded Components are **outside the scope of the MPL 2.0**. The Gimel
 Technologies Terms of Service are the sole and independent legal basis for any

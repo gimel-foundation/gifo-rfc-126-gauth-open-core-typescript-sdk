@@ -1,6 +1,6 @@
 {
   "name": "@gauth/core",
-  "version": "0.1.0",
+  "version": "0.91.0",
   "description": "GAuth Open Core TypeScript SDK — Power-of-Attorney credentials for AI agent governance (GiFo RFCs 0116, 0117, 0118)",
   "license": "MPL-2.0",
   "type": "module",
