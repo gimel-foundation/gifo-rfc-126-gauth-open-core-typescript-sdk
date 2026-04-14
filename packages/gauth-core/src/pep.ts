@@ -36,7 +36,7 @@ export interface PEPOptions {
   strictSectorMode?: boolean;
   strictRegionMode?: boolean;
   oauthAdapter?: { validateToken(token: string): Promise<{ valid: boolean; reason?: string }> };
-  connectorRegistry?: { checkLicenseCompliance(): Array<{ slot: string; violation: string }> };
+  connectorRegistry?: { checkLicenseCompliance(): Array<{ slot_name?: string; detail?: string; event_type?: string }> };
 }
 
 interface ParsedCredential {
@@ -189,7 +189,7 @@ export async function enforceAction(
     if (opts.connectorRegistry) {
       const licenseViolations = opts.connectorRegistry.checkLicenseCompliance();
       if (licenseViolations.length > 0) {
-        const detail = licenseViolations.map(v => `${v.slot}: ${v.violation}`).join("; ");
+        const detail = licenseViolations.map(v => `${v.slot_name ?? "unknown"}: ${v.detail ?? v.event_type ?? "violation"}`).join("; ");
         const licCheck = makeCheckResult("CHK-00", "License Compliance", "fail", `License compliance violations: ${detail}`, VIOLATION_CODES.CREDENTIAL_INVALID);
         checks.push(licCheck);
         violations.push({

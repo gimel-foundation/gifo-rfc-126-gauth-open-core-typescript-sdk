@@ -18,9 +18,10 @@ import {
 import type { OAuthEngineAdapter } from "../adapters.js";
 import { CONNECTOR_SLOT_CONFIGS, DEPLOYMENT_POLICY_MATRIX, DEFAULT_CUSTOMER_LICENSE_STATE, tariffEffectiveLevel } from "../types.js";
 
-const TEST_ED25519_PUBLIC_KEY = "302a300506032b6570032100d4a11996768452fb08e69be696676a048adba831271b707f0b3d17cf3aa9c5b1";
-const VALID_SIG_NOOP_GOV = "3e1e83dfd2747b9813b98b9887b68ffa44b8a2d843fc7501d0f61ada32b92d26fdfc4eac5332a3259023bcab8807b2150fb7683905cee99292121cf1dd663f07";
-const VALID_SIG_REAL_GOV = "e19ad1185a3dac72145689642533c4fce318e0065528a0af399babf8780b7bc9f732a57cb57d9dca9edd391e2216f64c78bf021ef2e01753d9097e906a46f30a";
+const TEST_ED25519_PUBLIC_KEY = "302a300506032b6570032100e518032d136e2cdeb080a76f68b8253e0664e48cf958e3ce476dc52f9c2ace5b";
+const VALID_SIG_NOOP_GOV = "0e80f5018ac58f076b2e65a1fd8d8e090364b671286935639e774ff2a0564140fbc688b13861877f53ae499531c2e46d5aff343b271a53ca288028145688ff0f";
+const VALID_SIG_REAL_GOV = "2acef38764c89cec68d4c9acbd1913704a7103cf75eaac66510faff846eedb71caca024818dbff627364fa77d628b5e1eb61254908349d17d71e0fafd24bb30f";
+const VALID_SIG_REAL_AI_GOV = "92e5c4ae0472fcfdfd4fd0184509954fcb63c41843c80eff20e5686074c3eb603c241076825651aac5261fd026c88da4d8e5aba86e25952875e99bdc45de090f";
 
 describe("AdapterRegistry", () => {
   it("registers adapters from trusted namespaces", async () => {
@@ -153,20 +154,34 @@ describe("ConnectorSlotRegistry", () => {
     expect(reg.getSlotStatus("foundry").status).toBe("active");
   });
 
-  it("registers Type C adapter as pending without attestation", () => {
+  it("registers NoOp Type C adapter as active immediately", () => {
     const reg = new ConnectorSlotRegistry("M");
     const adapter = new NoOpGovernanceAdapter();
     const result = reg.register("ai_governance", adapter, "G-Agent Governance");
     expect(result.success).toBe(true);
-    expect(reg.getSlotStatus("ai_governance").status).toBe("pending");
+    expect(reg.getSlotStatus("ai_governance").status).toBe("active");
   });
 
-  it("transitions Type C from pending to active on attestation", () => {
+  it("transitions non-NoOp Type C from pending to active on attestation", () => {
     const reg = new ConnectorSlotRegistry("M");
-    reg.register("ai_governance", new NoOpGovernanceAdapter(), "G-Agent");
+    const realAdapter = { name: "real-governance", __gauthNoOp: false as const, packageNamespace: "@gimel/gov" } as unknown as import("../adapters.js").GAuthAdapter;
+    reg.register("ai_governance", realAdapter, "Real-Gov");
     expect(reg.getSlotStatus("ai_governance").status).toBe("pending");
 
-    const attest = reg.satisfyAttestation("ai_governance");
+    const validManifest = {
+      manifest_version: "1.0" as const,
+      adapter_name: "real-governance",
+      adapter_type: "C" as const,
+      adapter_version: "1.0.0",
+      slot_name: "ai_governance" as const,
+      namespace: "@gimel/gov",
+      issued_at: "2025-01-01T00:00:00Z",
+      expires_at: "2030-01-01T00:00:00Z",
+      issuer: "gimel-foundation" as const,
+      public_key: TEST_ED25519_PUBLIC_KEY,
+      signature: VALID_SIG_REAL_GOV,
+    };
+    const attest = reg.satisfyAttestation("ai_governance", validManifest);
     expect(attest.success).toBe(true);
     expect(reg.getSlotStatus("ai_governance").status).toBe("active");
   });
@@ -582,30 +597,67 @@ describe("CT-REG: Manifest verification and namespace enforcement", () => {
     expect(result.error).toContain("slot_name");
   });
 
-  it("CT-REG-024: valid manifest succeeds attestation and activates adapter", () => {
+  it("CT-REG-024: register() with invalid manifest rejects non-NoOp Type C adapter", () => {
     const registry = new ConnectorSlotRegistry("M" as import("../types.js").TariffCode);
-    const adapter = new NoOpGovernanceAdapter();
-    registry.register("ai_governance", adapter, "noop-gov-v1");
+    const realAdapter = { name: "real-governance", packageNamespace: "@gimel/gov" } as unknown as import("../adapters.js").GAuthAdapter;
 
-    expect(registry.getSlotStatus("ai_governance").status).toBe("pending");
-
-    const validManifest = {
+    const badManifest = {
       manifest_version: "1.0" as const,
-      adapter_name: "noop-ai-governance",
+      adapter_name: "real-governance",
       adapter_type: "C" as const,
       adapter_version: "1.0.0",
       slot_name: "ai_governance" as const,
-      namespace: "@gimel/ai-governance",
+      namespace: "@gimel/gov",
       issued_at: "2025-01-01T00:00:00Z",
       expires_at: "2030-01-01T00:00:00Z",
       issuer: "gimel-foundation" as const,
       public_key: TEST_ED25519_PUBLIC_KEY,
-      signature: VALID_SIG_NOOP_GOV,
+      signature: "00".repeat(64),
     };
 
-    const result = registry.satisfyAttestation("ai_governance", validManifest);
+    const result = registry.register("ai_governance", realAdapter, "real-gov-v1", badManifest);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("signature");
+  });
+
+  it("CT-REG-024a: two-step register+attestation activates non-NoOp Type C adapter", () => {
+    const registry = new ConnectorSlotRegistry("M" as import("../types.js").TariffCode);
+    const realAdapter = { name: "real-governance", packageNamespace: "@gimel/gov" } as unknown as import("../adapters.js").GAuthAdapter;
+    registry.register("ai_governance", realAdapter, "real-gov-v1");
+    expect(registry.getSlotStatus("ai_governance").status).toBe("pending");
+
+    const validManifest = {
+      manifest_version: "1.0" as const,
+      adapter_name: "real-governance",
+      adapter_type: "C" as const,
+      adapter_version: "1.0.0",
+      slot_name: "ai_governance" as const,
+      namespace: "@gimel/gov",
+      issued_at: "2025-01-01T00:00:00Z",
+      expires_at: "2030-01-01T00:00:00Z",
+      issuer: "gimel-foundation" as const,
+      public_key: TEST_ED25519_PUBLIC_KEY,
+      signature: VALID_SIG_REAL_GOV,
+    };
+    const attest = registry.satisfyAttestation("ai_governance", validManifest);
+    expect(attest.success).toBe(true);
+    expect(registry.getSlotStatus("ai_governance").status).toBe("active");
+  });
+
+  it("CT-REG-024b: NoOp Type C adapter activates immediately on register without manifest", () => {
+    const registry = new ConnectorSlotRegistry("M" as import("../types.js").TariffCode);
+    const adapter = new NoOpGovernanceAdapter();
+    const result = registry.register("ai_governance", adapter, "noop-gov-v1");
     expect(result.success).toBe(true);
     expect(registry.getSlotStatus("ai_governance").status).toBe("active");
+  });
+
+  it("CT-REG-024c: non-NoOp Type C adapter without manifest stays pending", () => {
+    const registry = new ConnectorSlotRegistry("M" as import("../types.js").TariffCode);
+    const realAdapter = { name: "real-governance", packageNamespace: "@gimel/gov" } as unknown as import("../adapters.js").GAuthAdapter;
+    const result = registry.register("ai_governance", realAdapter, "real-gov-v1");
+    expect(result.success).toBe(true);
+    expect(registry.getSlotStatus("ai_governance").status).toBe("pending");
   });
 });
 
@@ -762,7 +814,7 @@ describe("CT-REG: Non-NoOp Type C attestation requires manifest", () => {
       expires_at: "2030-01-01T00:00:00Z",
       issuer: "gimel-foundation" as const,
       public_key: TEST_ED25519_PUBLIC_KEY,
-      signature: VALID_SIG_REAL_GOV,
+      signature: VALID_SIG_REAL_AI_GOV,
     };
     const result = registry.satisfyAttestation("ai_governance", validManifest);
     expect(result.success).toBe(true);

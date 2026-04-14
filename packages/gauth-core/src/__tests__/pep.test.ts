@@ -698,7 +698,7 @@ describe("CT-PEP: License compliance at PEP level", () => {
 
     const mockRegistry = {
       checkLicenseCompliance() {
-        return [{ slot: "ai_governance", violation: "Adapter not attested" }];
+        return [{ slot_name: "ai_governance", detail: "Adapter not attested", event_type: "LICENSE_COMPLIANCE_VIOLATION" }];
       },
     };
 

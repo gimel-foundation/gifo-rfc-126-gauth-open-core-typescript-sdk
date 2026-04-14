@@ -636,6 +636,14 @@ export class ManagementAPI {
       }
     }
 
+    if (restriction.active_modules && parent.scope.active_modules) {
+      for (const mod of restriction.active_modules) {
+        if (!parent.scope.active_modules.includes(mod)) {
+          return makeError(`active_module '${mod}' is not in parent active_modules.`);
+        }
+      }
+    }
+
     if (restriction.platform_permissions && parent.scope.platform_permissions) {
       const escalation = this.checkPlatformPermSubset(
         parent.scope.platform_permissions as Record<string, unknown>,
@@ -709,24 +717,44 @@ export class ManagementAPI {
     const restrictionVerbs = request.scope_restriction.core_verbs;
     if (restrictionVerbs) {
       for (const [verb, policy] of Object.entries(restrictionVerbs)) {
-        childVerbs[verb] = policy;
+        const parentPolicy = parent.scope.core_verbs[verb];
+        if (!parentPolicy) continue;
+        if (!parentPolicy.allowed) {
+          childVerbs[verb] = { ...parentPolicy };
+          continue;
+        }
+        childVerbs[verb] = {
+          ...policy,
+          allowed: parentPolicy.allowed && policy.allowed,
+          constraints: this.mergeConstraints(parentPolicy.constraints, policy.constraints),
+        };
       }
     } else {
-      Object.assign(childVerbs, parent.scope.core_verbs);
+      for (const [verb, policy] of Object.entries(parent.scope.core_verbs)) {
+        childVerbs[verb] = { ...policy };
+      }
     }
 
     const childScope: PoAScope = {
       governance_profile: request.scope_restriction.governance_profile ?? parent.scope.governance_profile,
       phase: request.scope_restriction.phase ?? parent.scope.phase,
       core_verbs: childVerbs,
-      active_modules: request.scope_restriction.active_modules ?? parent.scope.active_modules,
-      allowed_paths: request.scope_restriction.allowed_paths ?? parent.scope.allowed_paths,
+      active_modules: request.scope_restriction.active_modules
+        ? this.intersectLists(parent.scope.active_modules, request.scope_restriction.active_modules)
+        : parent.scope.active_modules,
+      allowed_paths: request.scope_restriction.allowed_paths
+        ? this.intersectLists(parent.scope.allowed_paths, request.scope_restriction.allowed_paths)
+        : parent.scope.allowed_paths,
       denied_paths: [
         ...(parent.scope.denied_paths ?? []),
         ...(request.scope_restriction.denied_paths ?? []),
       ],
-      allowed_sectors: request.scope_restriction.allowed_sectors ?? parent.scope.allowed_sectors,
-      allowed_regions: request.scope_restriction.allowed_regions ?? parent.scope.allowed_regions,
+      allowed_sectors: request.scope_restriction.allowed_sectors
+        ? this.intersectLists(parent.scope.allowed_sectors, request.scope_restriction.allowed_sectors)
+        : parent.scope.allowed_sectors,
+      allowed_regions: request.scope_restriction.allowed_regions
+        ? this.intersectLists(parent.scope.allowed_regions, request.scope_restriction.allowed_regions)
+        : parent.scope.allowed_regions,
       platform_permissions: request.scope_restriction.platform_permissions ?? parent.scope.platform_permissions,
     };
 
@@ -982,6 +1010,56 @@ export class ManagementAPI {
 
     const accepted = ceilingViolations.length === 0 && consistencyErrors.length === 0;
     return { accepted, schema_errors: schemaErrors, ceiling_violations: ceilingViolations, consistency_errors: consistencyErrors };
+  }
+
+  private mergeConstraints(
+    parentConstraints?: import("./types.js").ToolPolicyConstraints,
+    childConstraints?: import("./types.js").ToolPolicyConstraints,
+  ): import("./types.js").ToolPolicyConstraints | undefined {
+    if (!parentConstraints && !childConstraints) return undefined;
+    if (!parentConstraints) return childConstraints;
+    if (!childConstraints) return parentConstraints;
+
+    const merged: import("./types.js").ToolPolicyConstraints = { ...parentConstraints };
+
+    if (childConstraints.max_file_size_bytes !== undefined) {
+      merged.max_file_size_bytes = parentConstraints.max_file_size_bytes !== undefined
+        ? Math.min(parentConstraints.max_file_size_bytes, childConstraints.max_file_size_bytes)
+        : childConstraints.max_file_size_bytes;
+    }
+    if (childConstraints.max_delegation_depth !== undefined) {
+      merged.max_delegation_depth = parentConstraints.max_delegation_depth !== undefined
+        ? Math.min(parentConstraints.max_delegation_depth, childConstraints.max_delegation_depth)
+        : childConstraints.max_delegation_depth;
+    }
+    if (childConstraints.path_patterns) {
+      merged.path_patterns = parentConstraints.path_patterns
+        ? parentConstraints.path_patterns.filter(p => childConstraints.path_patterns!.includes(p))
+        : childConstraints.path_patterns;
+      if (merged.path_patterns.length === 0 && childConstraints.path_patterns.length > 0) {
+        merged.path_patterns = childConstraints.path_patterns;
+      }
+    }
+    if (childConstraints.allowed_commands) {
+      merged.allowed_commands = parentConstraints.allowed_commands
+        ? parentConstraints.allowed_commands.filter(c => childConstraints.allowed_commands!.includes(c))
+        : childConstraints.allowed_commands;
+    }
+    if (childConstraints.denied_commands) {
+      merged.denied_commands = [
+        ...(parentConstraints.denied_commands ?? []),
+        ...(childConstraints.denied_commands ?? []),
+      ];
+      merged.denied_commands = [...new Set(merged.denied_commands)];
+    }
+    return merged;
+  }
+
+  private intersectLists(parentList?: string[], childList?: string[]): string[] | undefined {
+    if (!parentList) return childList;
+    if (!childList) return parentList;
+    const intersection = parentList.filter(item => childList.includes(item));
+    return intersection;
   }
 
   private hasAuthority(userId: string, mandate: MandateDetail): boolean {

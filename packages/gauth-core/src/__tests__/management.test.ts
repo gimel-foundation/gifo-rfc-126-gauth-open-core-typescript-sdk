@@ -930,4 +930,155 @@ describe("CT-MGMT: generatePoaMap", () => {
       expect(result.error_code).toBe("MANDATE_NOT_FOUND");
     }
   });
+
+  it("CT-MGMT-033: delegation narrowing computes numeric min for constraints", async () => {
+    const issuer = "admin@example.com";
+    const parentReq = makeCreateRequest({
+      scope: {
+        governance_profile: "standard",
+        phase: "build",
+        core_verbs: {
+          "foundry.file.create": {
+            allowed: true,
+            constraints: { max_file_size_bytes: 10000, max_delegation_depth: 3 },
+          },
+          "foundry.agent.delegate": { allowed: true, constraints: { max_delegation_depth: 3 } },
+        },
+      },
+    });
+    const parent = await api.createMandate(parentReq);
+    expect(isManagementError(parent)).toBe(false);
+    if (isManagementError(parent)) return;
+    await api.activateMandate({ mandate_id: parent.mandate_id, activated_by: issuer });
+
+    const delegResult = await api.createDelegation({
+      parent_mandate_id: parent.mandate_id,
+      delegate_agent_id: "child-agent",
+      delegated_by: issuer,
+      scope_restriction: {
+        core_verbs: {
+          "foundry.file.create": {
+            allowed: true,
+            constraints: { max_file_size_bytes: 5000 },
+          },
+          "foundry.agent.delegate": { allowed: true, constraints: { max_delegation_depth: 2 } },
+        },
+      },
+    });
+    expect(isManagementError(delegResult)).toBe(false);
+    if (isManagementError(delegResult)) return;
+    const child = await api.getMandate(delegResult.child_mandate_id);
+    expect(isManagementError(child)).toBe(false);
+    if (isManagementError(child)) return;
+    const fileCreate = child.scope.core_verbs["foundry.file.create"];
+    expect(fileCreate.constraints?.max_file_size_bytes).toBe(5000);
+    expect(fileCreate.constraints?.max_delegation_depth).toBe(3);
+  });
+
+  it("CT-MGMT-034: delegation narrowing intersects allowed lists", async () => {
+    const issuer = "admin@example.com";
+    const parentReq = makeCreateRequest({
+      scope: {
+        governance_profile: "standard",
+        phase: "build",
+        core_verbs: {
+          "foundry.file.create": { allowed: true },
+          "foundry.agent.delegate": { allowed: true, constraints: { max_delegation_depth: 2 } },
+        },
+        active_modules: ["mod-a", "mod-b", "mod-c"],
+        allowed_regions: ["EU", "US"],
+        allowed_sectors: ["finance", "health"],
+      },
+    });
+    const parent = await api.createMandate(parentReq);
+    expect(isManagementError(parent)).toBe(false);
+    if (isManagementError(parent)) return;
+    await api.activateMandate({ mandate_id: parent.mandate_id, activated_by: issuer });
+
+    const delegResult = await api.createDelegation({
+      parent_mandate_id: parent.mandate_id,
+      delegate_agent_id: "child-agent",
+      delegated_by: issuer,
+      scope_restriction: {
+        active_modules: ["mod-b", "mod-c"],
+        allowed_regions: ["EU"],
+        allowed_sectors: ["finance"],
+      },
+    });
+    expect(isManagementError(delegResult)).toBe(false);
+    if (isManagementError(delegResult)) return;
+    const child = await api.getMandate(delegResult.child_mandate_id);
+    expect(isManagementError(child)).toBe(false);
+    if (isManagementError(child)) return;
+    expect(child.scope.active_modules).toEqual(["mod-b", "mod-c"]);
+    expect(child.scope.allowed_regions).toEqual(["EU"]);
+    expect(child.scope.allowed_sectors).toEqual(["finance"]);
+  });
+
+  it("CT-MGMT-035: delegation rejects disjoint active_modules escalation", async () => {
+    const issuer = "admin@example.com";
+    const parentReq = makeCreateRequest({
+      scope: {
+        governance_profile: "standard",
+        phase: "build",
+        core_verbs: {
+          "foundry.file.create": { allowed: true },
+          "foundry.agent.delegate": { allowed: true, constraints: { max_delegation_depth: 2 } },
+        },
+        active_modules: ["mod-a"],
+      },
+    });
+    const parent = await api.createMandate(parentReq);
+    expect(isManagementError(parent)).toBe(false);
+    if (isManagementError(parent)) return;
+    await api.activateMandate({ mandate_id: parent.mandate_id, activated_by: issuer });
+
+    const delegResult = await api.createDelegation({
+      parent_mandate_id: parent.mandate_id,
+      delegate_agent_id: "child-agent",
+      delegated_by: issuer,
+      scope_restriction: {
+        active_modules: ["mod-x"],
+      },
+    });
+    expect(isManagementError(delegResult)).toBe(true);
+    if (isManagementError(delegResult)) {
+      expect(delegResult.message).toContain("active_module");
+      expect(delegResult.message).toContain("escalation");
+    }
+  });
+
+  it("CT-MGMT-036: disjoint sector intersection yields rejection", async () => {
+    const issuer = "admin@example.com";
+    const parentReq = makeCreateRequest({
+      scope: {
+        governance_profile: "standard",
+        phase: "build",
+        core_verbs: {
+          "foundry.file.create": { allowed: true },
+          "foundry.agent.delegate": { allowed: true, constraints: { max_delegation_depth: 2 } },
+        },
+        allowed_regions: ["EU"],
+        allowed_sectors: ["finance"],
+      },
+    });
+    const parent = await api.createMandate(parentReq);
+    expect(isManagementError(parent)).toBe(false);
+    if (isManagementError(parent)) return;
+    await api.activateMandate({ mandate_id: parent.mandate_id, activated_by: issuer });
+
+    const delegResult = await api.createDelegation({
+      parent_mandate_id: parent.mandate_id,
+      delegate_agent_id: "child-agent",
+      delegated_by: issuer,
+      scope_restriction: {
+        allowed_regions: ["EU"],
+        allowed_sectors: ["health"],
+      },
+    });
+    expect(isManagementError(delegResult)).toBe(true);
+    if (isManagementError(delegResult)) {
+      expect(delegResult.message).toContain("sector");
+    }
+  });
 });

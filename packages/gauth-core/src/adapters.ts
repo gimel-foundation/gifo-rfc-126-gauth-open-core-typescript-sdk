@@ -303,7 +303,7 @@ export class ConnectorSlotRegistry {
     }
   }
 
-  register(slotName: ConnectorSlotName, adapter: GAuthAdapter, implementationLabel: string): { success: boolean; error?: string } {
+  register(slotName: ConnectorSlotName, adapter: GAuthAdapter, implementationLabel: string, manifest?: SealedAdapterManifest): { success: boolean; error?: string } {
     const gate = this.checkTariffGate(slotName);
     if (!gate.allowed && gate.availability === "null") {
       return { success: false, error: `Slot ${slotName} is not available for tariff ${this.tariff}` };
@@ -311,6 +311,7 @@ export class ConnectorSlotRegistry {
 
     const config = CONNECTOR_SLOT_CONFIGS[slotName];
     const slot = this.slots.get(slotName)!;
+    const isNoOp = "__gauthNoOp" in adapter && (adapter as { __gauthNoOp: boolean }).__gauthNoOp === true;
 
     if (config.adapterType === "C") {
       if ("packageNamespace" in adapter) {
@@ -327,11 +328,40 @@ export class ConnectorSlotRegistry {
         }
       }
 
-      if (!slot.attestationSatisfied) {
+      if (!isNoOp && manifest) {
+        const validationError = this.validateManifest(manifest, slotName);
+        if (validationError) {
+          this.logCompliance({
+            timestamp: new Date().toISOString(),
+            event_type: "MANIFEST_VERIFICATION_FAILED",
+            slot_name: slotName,
+            tariff: this.tariff,
+            detail: validationError,
+          });
+          return { success: false, error: validationError };
+        }
+        slot.adapter = adapter;
+        slot.implementationLabel = implementationLabel;
+        slot.registeredAt = new Date().toISOString();
+        slot.attestationSatisfied = true;
+        slot.status = "active";
+        return { success: true };
+      }
+
+      if (!isNoOp && !manifest) {
         slot.adapter = adapter;
         slot.implementationLabel = implementationLabel;
         slot.registeredAt = new Date().toISOString();
         slot.status = "pending";
+        return { success: true };
+      }
+
+      if (isNoOp) {
+        slot.adapter = adapter;
+        slot.implementationLabel = implementationLabel;
+        slot.registeredAt = new Date().toISOString();
+        slot.attestationSatisfied = true;
+        slot.status = "active";
         return { success: true };
       }
     }
@@ -561,7 +591,7 @@ export class ConnectorSlotRegistry {
       const config = CONNECTOR_SLOT_CONFIGS[slotName];
 
       if (config.adapterType === "C" && effective === "O") {
-        const isNoOp = slot.adapter.name.startsWith("noop-");
+        const isNoOp = "__gauthNoOp" in slot.adapter && (slot.adapter as { __gauthNoOp: boolean }).__gauthNoOp === true;
         if (!isNoOp) {
           const entry: ComplianceAuditEntry = {
             timestamp: new Date().toISOString(),
