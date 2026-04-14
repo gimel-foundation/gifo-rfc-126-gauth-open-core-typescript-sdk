@@ -184,6 +184,46 @@ export async function enforceAction(
     const constraints: EnforcedConstraint[] = [];
     const isStateful = !!request.context?.live_mandate_state;
 
+    if (request.credential.format === "jwt" && request.credential.token) {
+      const oauthPreCheck = runOAuthPreValidation(request.credential.token, parsed);
+      if (oauthPreCheck) {
+        checks.push(oauthPreCheck);
+        if (oauthPreCheck.result === "fail") {
+          const code = (oauthPreCheck.violation_code as ViolationCode) ?? VIOLATION_CODES.CREDENTIAL_INVALID;
+          violations.push({
+            code,
+            message: oauthPreCheck.detail ?? "OAuth pre-validation failed",
+            check_id: oauthPreCheck.check_id,
+            severity: "error",
+          });
+          const processingTime = performance.now() - startTime;
+          const audit: AuditRecord = {
+            processing_time_ms: Math.round(processingTime * 100) / 100,
+            pep_version: SDK_VERSION,
+            pep_interface_version: PEP_INTERFACE_VERSION,
+            credential_jti: parsed.jti,
+            mandate_id: parsed.mandateId,
+            agent_id: request.agent.agent_id,
+            action_verb: request.action.verb,
+            action_resource: request.action.resource,
+            checks_performed: 1,
+            checks_passed: 0,
+            checks_failed: 1,
+          };
+          return {
+            request_id: request.request_id,
+            decision: "DENY",
+            timestamp: new Date().toISOString(),
+            enforcement_mode: isStateful ? "stateful" : "stateless",
+            checks,
+            enforced_constraints: [],
+            violations,
+            audit,
+          };
+        }
+      }
+    }
+
     checks.push(runCHK01(parsed));
     checks.push(runCHK02(parsed, request, opts, isStateful));
     checks.push(runCHK03(parsed, request));
@@ -568,6 +608,22 @@ function runCHK09(parsed: ParsedCredential, request: EnforcementRequest): { chec
     }
   }
 
+  if (c.max_delegation_depth !== undefined) {
+    const chainLen = parsed.delegationChain?.length ?? 0;
+    const isDelegationAction = request.action.verb === "foundry.agent.delegate";
+    const effectiveLimit = isDelegationAction ? chainLen >= c.max_delegation_depth : chainLen > c.max_delegation_depth;
+    if (effectiveLimit) {
+      return {
+        check: makeCheckResult(
+          "CHK-09",
+          "Verb Constraints",
+          "fail",
+          `Delegation depth ${chainLen} exceeds max_delegation_depth ${c.max_delegation_depth} (see also CHK-16 for chain validation).`,
+        ),
+      };
+    }
+  }
+
   return { check: makeCheckResult("CHK-09", "Verb Constraints", "pass", "All verb constraints satisfied.") };
 }
 
@@ -780,6 +836,52 @@ function runCHK16(parsed: ParsedCredential, request: EnforcementRequest): CheckR
   }
 
   return makeCheckResult("CHK-16", "Delegation Chain", "pass", `Delegation chain valid (depth: ${chain.length}).`);
+}
+
+function runOAuthPreValidation(token: string, parsed: ParsedCredential): CheckResult | null {
+  const parts = token.split(".");
+  if (parts.length !== 3) {
+    return makeCheckResult(
+      "CHK-00",
+      "OAuth Pre-Validation",
+      "fail",
+      "JWT token does not have three parts (header.payload.signature).",
+      VIOLATION_CODES.CREDENTIAL_INVALID,
+    );
+  }
+
+  try {
+    const headerJson = Buffer.from(parts[0], "base64url").toString();
+    const header = JSON.parse(headerJson) as { alg?: string; typ?: string };
+    if (!header.alg) {
+      return makeCheckResult(
+        "CHK-00",
+        "OAuth Pre-Validation",
+        "fail",
+        "JWT header missing 'alg' field.",
+        VIOLATION_CODES.CREDENTIAL_INVALID,
+      );
+    }
+    if (header.alg === "none") {
+      return makeCheckResult(
+        "CHK-00",
+        "OAuth Pre-Validation",
+        "fail",
+        "JWT 'alg: none' is not permitted.",
+        VIOLATION_CODES.CREDENTIAL_INVALID,
+      );
+    }
+  } catch {
+    return makeCheckResult(
+      "CHK-00",
+      "OAuth Pre-Validation",
+      "fail",
+      "JWT header is not valid base64url-encoded JSON.",
+      VIOLATION_CODES.CREDENTIAL_INVALID,
+    );
+  }
+
+  return makeCheckResult("CHK-00", "OAuth Pre-Validation", "pass", "OAuth token structure valid.");
 }
 
 function extractVerbShort(verb: string): string | undefined {

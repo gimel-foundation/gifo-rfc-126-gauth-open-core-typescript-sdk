@@ -707,3 +707,206 @@ describe("isManagementError", () => {
     expect(isManagementError({ mandate_id: "mdt_abc" })).toBe(false);
   });
 });
+
+describe("CT-MGMT: Delegation approval gate", () => {
+  let api: ManagementAPI;
+  let store: InMemoryMandateStore;
+
+  beforeEach(() => {
+    store = new InMemoryMandateStore();
+    api = new ManagementAPI(store);
+  });
+
+  it("CT-MGMT-027: supervised parent → child starts as PENDING_APPROVAL", async () => {
+    const parent = await api.createMandate(makeCreateRequest({
+      scope: {
+        governance_profile: "enterprise",
+        phase: "build",
+        core_verbs: {
+          "foundry.file.create": { allowed: true },
+          "foundry.agent.delegate": { allowed: true, constraints: { max_delegation_depth: 2 } },
+        },
+      },
+      requirements: {
+        approval_mode: "supervised",
+        budget: { total_cents: 50000 },
+        ttl_seconds: 3600,
+      },
+    }));
+    if (isManagementError(parent)) return;
+    await api.activateMandate({ mandate_id: parent.mandate_id, activated_by: "admin@example.com" });
+
+    const result = await api.createDelegation({
+      parent_mandate_id: parent.mandate_id,
+      delegate_agent_id: "agent-002",
+      scope_restriction: {},
+      delegated_by: "admin@example.com",
+    });
+
+    expect(isManagementError(result)).toBe(false);
+    if (!isManagementError(result)) {
+      expect(result.status).toBe("PENDING_APPROVAL");
+    }
+  });
+
+  it("CT-MGMT-028: autonomous parent → child starts as DRAFT (no gate)", async () => {
+    const parent = await api.createMandate(makeCreateRequest({
+      scope: {
+        governance_profile: "enterprise",
+        phase: "build",
+        core_verbs: {
+          "foundry.file.create": { allowed: true },
+          "foundry.agent.delegate": { allowed: true, constraints: { max_delegation_depth: 2 } },
+        },
+      },
+      requirements: {
+        approval_mode: "autonomous",
+        budget: { total_cents: 50000 },
+        ttl_seconds: 3600,
+      },
+    }));
+    if (isManagementError(parent)) return;
+    await api.activateMandate({ mandate_id: parent.mandate_id, activated_by: "admin@example.com" });
+
+    const result = await api.createDelegation({
+      parent_mandate_id: parent.mandate_id,
+      delegate_agent_id: "agent-002",
+      scope_restriction: {},
+      delegated_by: "admin@example.com",
+    });
+
+    expect(isManagementError(result)).toBe(false);
+    if (!isManagementError(result)) {
+      expect(result.status).toBe("DRAFT");
+    }
+  });
+
+  it("CT-MGMT-029: approveDelegation transitions PENDING_APPROVAL → DRAFT", async () => {
+    const parent = await api.createMandate(makeCreateRequest({
+      scope: {
+        governance_profile: "enterprise",
+        phase: "build",
+        core_verbs: {
+          "foundry.file.create": { allowed: true },
+          "foundry.agent.delegate": { allowed: true, constraints: { max_delegation_depth: 2 } },
+        },
+      },
+      requirements: {
+        approval_mode: "supervised",
+        budget: { total_cents: 50000 },
+        ttl_seconds: 3600,
+      },
+    }));
+    if (isManagementError(parent)) return;
+    await api.activateMandate({ mandate_id: parent.mandate_id, activated_by: "admin@example.com" });
+
+    const delegation = await api.createDelegation({
+      parent_mandate_id: parent.mandate_id,
+      delegate_agent_id: "agent-002",
+      scope_restriction: {},
+      delegated_by: "admin@example.com",
+    });
+    if (isManagementError(delegation)) return;
+
+    const approval = await api.approveDelegation(delegation.child_mandate_id, "admin@example.com");
+    expect(isManagementError(approval)).toBe(false);
+    if (!isManagementError(approval)) {
+      expect(approval.status).toBe("DRAFT");
+    }
+  });
+
+  it("CT-MGMT-030: four-eyes delegation requires different approver", async () => {
+    const parent = await api.createMandate(makeCreateRequest({
+      parties: {
+        subject: "agent-001",
+        customer_id: "cust-123",
+        project_id: "proj-456",
+        issued_by: "admin@example.com",
+        approval_chain: ["admin@example.com", "reviewer@example.com"],
+      },
+      scope: {
+        governance_profile: "enterprise",
+        phase: "build",
+        core_verbs: {
+          "foundry.file.create": { allowed: true },
+          "foundry.agent.delegate": { allowed: true, constraints: { max_delegation_depth: 2 } },
+        },
+      },
+      requirements: {
+        approval_mode: "four-eyes",
+        budget: { total_cents: 50000 },
+        ttl_seconds: 3600,
+      },
+    }));
+    if (isManagementError(parent)) return;
+    await api.activateMandate({ mandate_id: parent.mandate_id, activated_by: "admin@example.com" });
+
+    const delegation = await api.createDelegation({
+      parent_mandate_id: parent.mandate_id,
+      delegate_agent_id: "agent-002",
+      scope_restriction: {},
+      delegated_by: "admin@example.com",
+    });
+    if (isManagementError(delegation)) return;
+
+    const samePersonApproval = await api.approveDelegation(delegation.child_mandate_id, "admin@example.com");
+    expect(isManagementError(samePersonApproval)).toBe(true);
+    if (isManagementError(samePersonApproval)) {
+      expect(samePersonApproval.error_code).toBe("INSUFFICIENT_AUTHORITY");
+      expect(samePersonApproval.message).toContain("Four-eyes");
+    }
+
+    const differentPersonApproval = await api.approveDelegation(delegation.child_mandate_id, "reviewer@example.com");
+    expect(isManagementError(differentPersonApproval)).toBe(false);
+  });
+});
+
+describe("CT-MGMT: generatePoaMap", () => {
+  let api: ManagementAPI;
+  let store: InMemoryMandateStore;
+
+  beforeEach(() => {
+    store = new InMemoryMandateStore();
+    api = new ManagementAPI(store);
+  });
+
+  it("CT-MGMT-031: generates PoA map summary for mandate", async () => {
+    const result = await api.createMandate(makeCreateRequest({
+      scope: {
+        governance_profile: "enterprise",
+        phase: "build",
+        core_verbs: {
+          "foundry.file.create": { allowed: true },
+          "foundry.file.delete": { allowed: false },
+          "foundry.agent.delegate": { allowed: true, constraints: { max_delegation_depth: 2 } },
+        },
+        platform_permissions: {
+          database: { read: true, write: false },
+        },
+      },
+    }));
+    if (isManagementError(result)) return;
+
+    const map = await api.generatePoaMap(result.mandate_id);
+    expect(isManagementError(map)).toBe(false);
+    if (!isManagementError(map)) {
+      expect(map.mandate_id).toBe(result.mandate_id);
+      expect(map.governance_profile).toBe("enterprise");
+      expect(map.phase).toBe("build");
+      expect(map.allowed_verbs).toContain("foundry.file.create");
+      expect(map.denied_verbs).toContain("foundry.file.delete");
+      expect(map.max_delegation_depth).toBe(2);
+      expect(map.platform_permissions_summary["database.read"]).toBe(true);
+      expect(map.platform_permissions_summary["database.write"]).toBe(false);
+      expect(map.generated_at).toBeDefined();
+    }
+  });
+
+  it("CT-MGMT-032: generatePoaMap returns NOT_FOUND for missing mandate", async () => {
+    const result = await api.generatePoaMap("mdt_nonexistent");
+    expect(isManagementError(result)).toBe(true);
+    if (isManagementError(result)) {
+      expect(result.error_code).toBe("MANDATE_NOT_FOUND");
+    }
+  });
+});

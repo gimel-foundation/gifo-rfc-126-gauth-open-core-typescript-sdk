@@ -33,6 +33,7 @@ export const MandateStatus = z.enum([
   "REVOKED",
   "BUDGET_EXCEEDED",
   "SUPERSEDED",
+  "PENDING_APPROVAL",
 ]);
 export type MandateStatus = z.infer<typeof MandateStatus>;
 
@@ -343,6 +344,7 @@ export const VIOLATION_CODES = {
   APPROVAL_REQUIRED: "APPROVAL_REQUIRED",
   DELEGATION_DEPTH_EXCEEDED: "DELEGATION_DEPTH_EXCEEDED",
   DELEGATION_SCOPE_EXCEEDED: "DELEGATION_SCOPE_EXCEEDED",
+  LICENSE_COMPLIANCE_VIOLATION: "LICENSE_COMPLIANCE_VIOLATION",
 } as const;
 export type ViolationCode = (typeof VIOLATION_CODES)[keyof typeof VIOLATION_CODES];
 
@@ -381,6 +383,7 @@ export const MGMT_ERROR_CODES = {
   TTL_DECREASE_DENIED: "TTL_DECREASE_DENIED",
   MANDATE_EXPIRED: "MANDATE_EXPIRED",
   INTERNAL_ERROR: "INTERNAL_ERROR",
+  APPROVAL_REQUIRED_FOR_DELEGATION: "APPROVAL_REQUIRED_FOR_DELEGATION",
 } as const;
 export type MgmtErrorCode = (typeof MGMT_ERROR_CODES)[keyof typeof MGMT_ERROR_CODES];
 
@@ -584,7 +587,7 @@ export interface DelegationRequest {
 export interface DelegationResponse {
   child_mandate_id: string;
   parent_mandate_id: string;
-  status: "DRAFT";
+  status: "DRAFT" | "PENDING_APPROVAL";
   delegation_depth: number;
   scope_checksum: string;
   audit: MandateAuditEntry;
@@ -768,8 +771,16 @@ export interface MandateStore {
   findActive(agentId: string, projectId: string): Promise<MandateDetail | null>;
 }
 
-export const TariffCode = z.enum(["O", "S", "M", "L"]);
+export const TariffCode = z.enum(["O", "S", "M", "L", "M+O", "L+O"]);
 export type TariffCode = z.infer<typeof TariffCode>;
+
+export function tariffEffectiveLevel(code: TariffCode): "O" | "S" | "M" | "L" {
+  switch (code) {
+    case "M+O": return "M";
+    case "L+O": return "L";
+    default: return code;
+  }
+}
 
 export const LicenseType = z.enum(["mpl_2_0", "gimel_tos"]);
 export type LicenseType = z.infer<typeof LicenseType>;
@@ -829,7 +840,8 @@ export const CONNECTOR_SLOT_CONFIGS: Record<ConnectorSlotName, ConnectorSlotConf
   dna_identity: { slotName: "dna_identity", slotNumber: 7, adapterType: "C", attestationRequired: true, mandatory: false, nullBehavior: "DNA features unavailable; standard identity", timeoutMs: 30000, maxRetries: 0 },
 };
 
-export type DeploymentPolicyMatrix = Record<ConnectorSlotName, Record<TariffCode, AvailabilityCode>>;
+export type BaseTariffCode = "O" | "S" | "M" | "L";
+export type DeploymentPolicyMatrix = Record<ConnectorSlotName, Record<BaseTariffCode, AvailabilityCode>>;
 
 export const DEPLOYMENT_POLICY_MATRIX: DeploymentPolicyMatrix = {
   pdp:            { O: "active_always", S: "active_always", M: "active_always", L: "active_always" },
@@ -885,4 +897,125 @@ export const DEFAULT_CUSTOMER_LICENSE_STATE: CustomerLicenseState = {
 export interface S2SAuthHeaders {
   "X-GAuth-Platform-Key": string;
   "X-GAuth-HMAC-Signature": string;
+}
+
+export interface PoaMapSummary {
+  mandate_id: string;
+  subject: string;
+  governance_profile: GovernanceProfile;
+  phase: Phase;
+  allowed_verbs: string[];
+  denied_verbs: string[];
+  allowed_paths: string[];
+  denied_paths: string[];
+  allowed_regions: string[];
+  allowed_sectors: string[];
+  budget: { total_cents: number; remaining_cents: number } | null;
+  ttl_seconds: number | null;
+  delegation_depth: number;
+  max_delegation_depth: number;
+  approval_mode: ApprovalMode;
+  platform_permissions_summary: Record<string, boolean>;
+  effective_constraints: Record<string, Record<string, unknown>>;
+  generated_at: string;
+}
+
+export interface ComplianceAuditEntry {
+  timestamp: string;
+  event_type: "LICENSE_COMPLIANCE_VIOLATION" | "TARIFF_DOWNGRADE" | "ADAPTER_DEACTIVATED" | "MANIFEST_VERIFICATION_FAILED";
+  slot_name?: ConnectorSlotName;
+  tariff?: TariffCode;
+  detail: string;
+}
+
+export interface W3cVcCredentialSubject {
+  id: string;
+  gauthMandate: {
+    mandateId: string;
+    governanceProfile: GovernanceProfile;
+    phase: Phase;
+    scopeChecksum: string;
+    approvalMode: ApprovalMode;
+    coreVerbs: Record<string, { allowed: boolean }>;
+  };
+}
+
+export interface W3cVerifiableCredential {
+  "@context": string[];
+  id: string;
+  type: string[];
+  issuer: string | { id: string; name?: string };
+  issuanceDate: string;
+  expirationDate?: string;
+  credentialSubject: W3cVcCredentialSubject;
+  credentialStatus?: {
+    id: string;
+    type: string;
+    statusPurpose: string;
+    statusListIndex: string;
+    statusListCredential: string;
+  };
+  proof?: W3cDataIntegrityProof;
+}
+
+export interface W3cDataIntegrityProof {
+  type: string;
+  cryptosuite: string;
+  created: string;
+  verificationMethod: string;
+  proofPurpose: string;
+  proofValue: string;
+}
+
+export interface W3cVerifiablePresentation {
+  "@context": string[];
+  type: string[];
+  holder: string;
+  verifiableCredential: W3cVerifiableCredential[];
+  proof?: W3cDataIntegrityProof;
+}
+
+export interface BitstringStatusListEntry {
+  statusListIndex: number;
+  statusListCredential: string;
+  statusPurpose: "revocation" | "suspension";
+}
+
+export interface SelectiveDisclosureFrame {
+  _sd: string[];
+  credentialSubject?: {
+    _sd: string[];
+  };
+}
+
+export interface OpenID4VCICredentialOffer {
+  credential_issuer: string;
+  credentials: string[];
+  grants?: {
+    "urn:ietf:params:oauth:grant-type:pre-authorized_code"?: {
+      "pre-authorized_code": string;
+      user_pin_required: boolean;
+    };
+  };
+}
+
+export interface OpenID4VPPresentationRequest {
+  response_type: "vp_token";
+  client_id: string;
+  redirect_uri: string;
+  nonce: string;
+  presentation_definition: {
+    id: string;
+    input_descriptors: Array<{
+      id: string;
+      name: string;
+      purpose: string;
+      constraints: {
+        fields: Array<{
+          path: string[];
+          filter?: Record<string, unknown>;
+        }>;
+      };
+    }>;
+  };
 }

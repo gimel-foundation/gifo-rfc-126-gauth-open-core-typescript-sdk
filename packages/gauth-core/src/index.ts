@@ -55,9 +55,11 @@ export {
   CONNECTOR_SLOT_CONFIGS,
   DEPLOYMENT_POLICY_MATRIX,
   DEFAULT_CUSTOMER_LICENSE_STATE,
+  tariffEffectiveLevel,
 } from "./types.js";
 
 export type {
+  BaseTariffCode,
   CheckResult,
   EnforcedConstraint,
   Violation,
@@ -101,6 +103,16 @@ export type {
   SealedAdapterManifest,
   CustomerLicenseState,
   S2SAuthHeaders,
+  PoaMapSummary,
+  ComplianceAuditEntry,
+  W3cVcCredentialSubject,
+  W3cVerifiableCredential,
+  W3cDataIntegrityProof,
+  W3cVerifiablePresentation,
+  BitstringStatusListEntry,
+  SelectiveDisclosureFrame,
+  OpenID4VCICredentialOffer,
+  OpenID4VPPresentationRequest,
 } from "./types.js";
 
 export {
@@ -162,6 +174,23 @@ export type {
   AdapterRegistrationOptions,
   ConnectorSlotState,
 } from "./adapters.js";
+
+export {
+  poaToVerifiableCredential,
+  mandateToVerifiableCredential,
+  createVerifiablePresentation,
+  createDataIntegrityProof,
+  attachProof,
+  attachPresentationProof,
+  resolveDid,
+  createBitstringStatusListEntry,
+  createSelectiveDisclosureFrame,
+  createCredentialOffer,
+  createPresentationRequest,
+  validateVerifiableCredential,
+  validateVerifiablePresentation,
+} from "./vc.js";
+export type { PoaToVcOptions } from "./vc.js";
 
 export {
   handlePEPRequest,

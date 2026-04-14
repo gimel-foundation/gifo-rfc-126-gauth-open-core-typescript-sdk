@@ -16,7 +16,7 @@ import {
   verifyS2SSignature,
 } from "../adapters.js";
 import type { OAuthEngineAdapter } from "../adapters.js";
-import { CONNECTOR_SLOT_CONFIGS, DEPLOYMENT_POLICY_MATRIX, DEFAULT_CUSTOMER_LICENSE_STATE } from "../types.js";
+import { CONNECTOR_SLOT_CONFIGS, DEPLOYMENT_POLICY_MATRIX, DEFAULT_CUSTOMER_LICENSE_STATE, tariffEffectiveLevel } from "../types.js";
 
 describe("AdapterRegistry", () => {
   it("registers adapters from trusted namespaces", async () => {
@@ -447,5 +447,248 @@ describe("createDefaultRegistry", () => {
   it("returns an empty registry with default trusted namespaces", () => {
     const registry = createDefaultRegistry();
     expect(registry.list()).toHaveLength(0);
+  });
+});
+
+describe("CT-TM: Tariff hybrid codes", () => {
+  it("CT-TM-001: M+O hybrid resolves to effective level M", () => {
+    expect(tariffEffectiveLevel("M+O")).toBe("M");
+  });
+
+  it("CT-TM-002: L+O hybrid resolves to effective level L", () => {
+    expect(tariffEffectiveLevel("L+O")).toBe("L");
+  });
+
+  it("CT-TM-003: base codes resolve to themselves", () => {
+    expect(tariffEffectiveLevel("O")).toBe("O");
+    expect(tariffEffectiveLevel("S")).toBe("S");
+    expect(tariffEffectiveLevel("M")).toBe("M");
+    expect(tariffEffectiveLevel("L")).toBe("L");
+  });
+
+  it("CT-TM-004: ConnectorSlotRegistry at M+O resolves ai_governance same as M", () => {
+    const registryMO = new ConnectorSlotRegistry("M+O" as import("../types.js").TariffCode);
+    const registryM = new ConnectorSlotRegistry("M" as import("../types.js").TariffCode);
+    const gateMO = registryMO.checkTariffGate("ai_governance");
+    const gateM = registryM.checkTariffGate("ai_governance");
+    expect(gateMO.availability).toBe(gateM.availability);
+  });
+
+  it("CT-TM-005: ConnectorSlotRegistry at L+O resolves dna_identity same as L", () => {
+    const registryLO = new ConnectorSlotRegistry("L+O" as import("../types.js").TariffCode);
+    const registryL = new ConnectorSlotRegistry("L" as import("../types.js").TariffCode);
+    const gateLO = registryLO.checkTariffGate("dna_identity");
+    const gateL = registryL.checkTariffGate("dna_identity");
+    expect(gateLO.availability).toBe(gateL.availability);
+  });
+});
+
+describe("CT-REG: Manifest verification and namespace enforcement", () => {
+  it("CT-REG-019: rejects Type C adapter with non-@gimel/ namespace", () => {
+    const registry = new ConnectorSlotRegistry("M" as import("../types.js").TariffCode);
+    const badAdapter = {
+      adapterType: "C" as const,
+      name: "bad-governance",
+      packageNamespace: "@evil/governance",
+      async checkAccess() { return { allowed: true, reason: "" }; },
+      async getRecommendations() { return []; },
+      async healthCheck() { return { healthy: true, latencyMs: 0 }; },
+    };
+    const result = registry.register("ai_governance", badAdapter, "bad-gov-v1");
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("@gimel/");
+  });
+
+  it("CT-REG-020: accepts Type C adapter with @gimel/ namespace", () => {
+    const registry = new ConnectorSlotRegistry("M" as import("../types.js").TariffCode);
+    const goodAdapter = new NoOpGovernanceAdapter();
+    const result = registry.register("ai_governance", goodAdapter, "noop-gov-v1");
+    expect(result.success).toBe(true);
+  });
+
+  it("CT-REG-021: manifest verification rejects expired manifest", () => {
+    const registry = new ConnectorSlotRegistry("M" as import("../types.js").TariffCode);
+    const goodAdapter = new NoOpGovernanceAdapter();
+    registry.register("ai_governance", goodAdapter, "noop-gov-v1");
+
+    const expiredManifest = {
+      manifest_version: "1.0" as const,
+      adapter_name: "test-governance",
+      adapter_type: "C" as const,
+      adapter_version: "1.0.0",
+      slot_name: "ai_governance" as const,
+      namespace: "@gimel/ai-governance",
+      issued_at: "2020-01-01T00:00:00Z",
+      expires_at: "2021-01-01T00:00:00Z",
+      issuer: "gimel-foundation" as const,
+      public_key: "test-key",
+      signature: "a".repeat(128),
+    };
+
+    const result = registry.satisfyAttestation("ai_governance", expiredManifest);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("expired");
+  });
+
+  it("CT-REG-022: manifest verification rejects non-@gimel/ namespace in manifest", () => {
+    const registry = new ConnectorSlotRegistry("M" as import("../types.js").TariffCode);
+    const adapter = new NoOpGovernanceAdapter();
+    registry.register("ai_governance", adapter, "noop-gov-v1");
+
+    const badManifest = {
+      manifest_version: "1.0" as const,
+      adapter_name: "test-governance",
+      adapter_type: "C" as const,
+      adapter_version: "1.0.0",
+      slot_name: "ai_governance" as const,
+      namespace: "@evil/governance",
+      issued_at: new Date(Date.now() - 60000).toISOString(),
+      expires_at: new Date(Date.now() + 86400000).toISOString(),
+      issuer: "gimel-foundation" as const,
+      public_key: "test-key",
+      signature: "a".repeat(128),
+    };
+
+    const result = registry.satisfyAttestation("ai_governance", badManifest);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("@gimel/");
+  });
+
+  it("CT-REG-023: manifest verification rejects wrong slot_name", () => {
+    const registry = new ConnectorSlotRegistry("M" as import("../types.js").TariffCode);
+    const adapter = new NoOpGovernanceAdapter();
+    registry.register("ai_governance", adapter, "noop-gov-v1");
+
+    const wrongSlotManifest = {
+      manifest_version: "1.0" as const,
+      adapter_name: "test-governance",
+      adapter_type: "C" as const,
+      adapter_version: "1.0.0",
+      slot_name: "web3_identity" as const,
+      namespace: "@gimel/ai-governance",
+      issued_at: new Date(Date.now() - 60000).toISOString(),
+      expires_at: new Date(Date.now() + 86400000).toISOString(),
+      issuer: "gimel-foundation" as const,
+      public_key: "test-key",
+      signature: "a".repeat(128),
+    };
+
+    const result = registry.satisfyAttestation("ai_governance", wrongSlotManifest);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("slot_name");
+  });
+
+  it("CT-REG-024: valid manifest succeeds attestation and activates adapter", () => {
+    const registry = new ConnectorSlotRegistry("M" as import("../types.js").TariffCode);
+    const adapter = new NoOpGovernanceAdapter();
+    registry.register("ai_governance", adapter, "noop-gov-v1");
+
+    expect(registry.getSlotStatus("ai_governance").status).toBe("pending");
+
+    const validManifest = {
+      manifest_version: "1.0" as const,
+      adapter_name: "noop-ai-governance",
+      adapter_type: "C" as const,
+      adapter_version: "1.0.0",
+      slot_name: "ai_governance" as const,
+      namespace: "@gimel/ai-governance",
+      issued_at: new Date(Date.now() - 60000).toISOString(),
+      expires_at: new Date(Date.now() + 86400000).toISOString(),
+      issuer: "gimel-foundation" as const,
+      public_key: "test-key",
+      signature: "a".repeat(128),
+    };
+
+    const result = registry.satisfyAttestation("ai_governance", validManifest);
+    expect(result.success).toBe(true);
+    expect(registry.getSlotStatus("ai_governance").status).toBe("active");
+  });
+});
+
+describe("CT-REG: Tariff downgrade re-evaluation", () => {
+  it("CT-REG-025: setTariff downgrades and deactivates non-compliant adapters", () => {
+    const registry = new ConnectorSlotRegistry("M" as import("../types.js").TariffCode);
+    const adapter = new NoOpGovernanceAdapter();
+    registry.register("ai_governance", adapter, "gov-v1");
+    registry.satisfyAttestation("ai_governance");
+
+    expect(registry.getSlotStatus("ai_governance").status).toBe("active");
+
+    const result = registry.setTariff("S" as import("../types.js").TariffCode);
+    expect(result.deactivated).toContain("ai_governance");
+    expect(registry.getSlotStatus("ai_governance").status).toBe("null");
+  });
+
+  it("CT-REG-026: setTariff upgrade does not deactivate adapters", () => {
+    const registry = new ConnectorSlotRegistry("S" as import("../types.js").TariffCode);
+    const adapter = new NoOpOAuthEngineAdapter();
+    registry.register("oauth_engine", adapter, "oauth-v1");
+
+    expect(registry.getSlotStatus("oauth_engine").status).toBe("active");
+
+    const result = registry.setTariff("M" as import("../types.js").TariffCode);
+    expect(result.deactivated).toHaveLength(0);
+    expect(registry.getSlotStatus("oauth_engine").status).toBe("active");
+  });
+
+  it("CT-REG-027: tariff downgrade logs compliance audit entries", () => {
+    const registry = new ConnectorSlotRegistry("M" as import("../types.js").TariffCode);
+    const adapter = new NoOpGovernanceAdapter();
+    registry.register("ai_governance", adapter, "gov-v1");
+    registry.satisfyAttestation("ai_governance");
+    registry.setTariff("O" as import("../types.js").TariffCode);
+
+    const log = registry.getComplianceLog();
+    expect(log.length).toBeGreaterThanOrEqual(2);
+    expect(log.some(e => e.event_type === "TARIFF_DOWNGRADE")).toBe(true);
+    expect(log.some(e => e.event_type === "ADAPTER_DEACTIVATED")).toBe(true);
+  });
+});
+
+describe("CT-LIC: License compliance checks", () => {
+  it("CT-LIC-010: checkLicenseCompliance detects non-NoOp Type C at tariff O", () => {
+    const registry = new ConnectorSlotRegistry("M" as import("../types.js").TariffCode);
+    const realAdapter = {
+      adapterType: "C" as const,
+      name: "real-ai-governance",
+      packageNamespace: "@gimel/ai-governance",
+      async checkAccess() { return { allowed: true, reason: "" }; },
+      async getRecommendations() { return []; },
+      async healthCheck() { return { healthy: true, latencyMs: 0 }; },
+    };
+    registry.register("ai_governance", realAdapter, "real-gov-v1");
+    registry.satisfyAttestation("ai_governance");
+
+    registry.setTariff("O" as import("../types.js").TariffCode);
+
+    registry.register("ai_governance", realAdapter, "real-gov-v1-force");
+
+    const violations = registry.checkLicenseCompliance();
+    expect(violations.length).toBe(0);
+  });
+
+  it("CT-LIC-011: compliance log records manifest verification failures", () => {
+    const registry = new ConnectorSlotRegistry("M" as import("../types.js").TariffCode);
+    const adapter = new NoOpGovernanceAdapter();
+    registry.register("ai_governance", adapter, "gov-v1");
+
+    const badManifest = {
+      manifest_version: "1.0" as const,
+      adapter_name: "test",
+      adapter_type: "C" as const,
+      adapter_version: "1.0.0",
+      slot_name: "ai_governance" as const,
+      namespace: "@evil/bad",
+      issued_at: new Date(Date.now() - 60000).toISOString(),
+      expires_at: new Date(Date.now() + 86400000).toISOString(),
+      issuer: "gimel-foundation" as const,
+      public_key: "test-key",
+      signature: "a".repeat(128),
+    };
+
+    registry.satisfyAttestation("ai_governance", badManifest);
+
+    const log = registry.getComplianceLog();
+    expect(log.some(e => e.event_type === "MANIFEST_VERIFICATION_FAILED")).toBe(true);
   });
 });

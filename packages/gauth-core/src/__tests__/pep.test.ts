@@ -512,3 +512,126 @@ describe("isEnforcementError", () => {
     expect(isEnforcementError({ decision: "PERMIT" } as unknown as EnforcementDecision)).toBe(false);
   });
 });
+
+describe("CT-PEP: OAuth pre-validation gate", () => {
+  it("CT-PEP-032: rejects JWT with alg:none", async () => {
+    const poa = makePoa();
+    const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
+    const payload = Buffer.from(JSON.stringify({ sub: "agent-001" })).toString("base64url");
+    const fakeToken = `${header}.${payload}.`;
+
+    const req = makeRequest({
+      credential: { format: "jwt", token: fakeToken },
+    });
+
+    const result = await enforceAction(req, poa);
+    if (!isEnforcementError(result)) {
+      expect(result.decision).toBe("DENY");
+      const chk00 = result.checks.find(c => c.check_id === "CHK-00");
+      expect(chk00).toBeDefined();
+      expect(chk00?.result).toBe("fail");
+      expect(chk00?.detail).toContain("alg: none");
+    }
+  });
+
+  it("CT-PEP-033: rejects malformed JWT (not 3 parts)", async () => {
+    const poa = makePoa();
+    const req = makeRequest({
+      credential: { format: "jwt", token: "notavalidtoken" },
+    });
+
+    const result = await enforceAction(req, poa);
+    if (!isEnforcementError(result)) {
+      expect(result.decision).toBe("DENY");
+      const chk00 = result.checks.find(c => c.check_id === "CHK-00");
+      expect(chk00).toBeDefined();
+      expect(chk00?.result).toBe("fail");
+    }
+  });
+
+  it("CT-PEP-034: passes pre-validation for well-formed JWT header", async () => {
+    const poa = makePoa();
+    const header = Buffer.from(JSON.stringify({ alg: "EdDSA", typ: "JWT" })).toString("base64url");
+    const payload = Buffer.from(JSON.stringify({ sub: "agent-001" })).toString("base64url");
+    const sig = Buffer.from("fakesig").toString("base64url");
+    const token = `${header}.${payload}.${sig}`;
+
+    const req = makeRequest({
+      credential: { format: "jwt", token, poa_snapshot: {
+        scope: poa.scope,
+        parties: poa.parties,
+        requirements: poa.requirements,
+      } },
+    });
+
+    const result = await enforceAction(req, poa);
+    if (!isEnforcementError(result)) {
+      const chk00 = result.checks.find(c => c.check_id === "CHK-00");
+      expect(chk00).toBeDefined();
+      expect(chk00?.result).toBe("pass");
+    }
+  });
+});
+
+describe("CT-PEP: CHK-09 max_delegation_depth cross-reference", () => {
+  it("CT-PEP-035: CHK-09 evaluates max_delegation_depth constraint", async () => {
+    const poa = makePoa({
+      scope: {
+        governance_profile: "enterprise",
+        phase: "run",
+        core_verbs: {
+          "foundry.agent.delegate": {
+            allowed: true,
+            constraints: { max_delegation_depth: 1 },
+          },
+        },
+      },
+      delegation_chain: [
+        { delegator: "admin", delegate: "agent-001", scope_restriction: {}, delegated_at: new Date().toISOString() },
+        { delegator: "agent-001", delegate: "agent-002", scope_restriction: {}, delegated_at: new Date().toISOString() },
+      ],
+    } as Partial<PoACredential>);
+
+    const req = makeRequest({
+      action: { verb: "foundry.agent.delegate", resource: "agent-003" },
+    });
+
+    const result = await enforceAction(req, poa);
+    if (!isEnforcementError(result)) {
+      const chk09 = result.checks.find(c => c.check_id === "CHK-09");
+      expect(chk09).toBeDefined();
+      expect(chk09?.result).toBe("fail");
+      expect(chk09?.detail).toContain("max_delegation_depth");
+      expect(chk09?.detail).toContain("CHK-16");
+    }
+  });
+
+  it("CT-PEP-036: CHK-09 passes when delegation depth within limit", async () => {
+    const poa = makePoa({
+      scope: {
+        governance_profile: "enterprise",
+        phase: "run",
+        core_verbs: {
+          "foundry.agent.delegate": {
+            allowed: true,
+            constraints: { max_delegation_depth: 3 },
+          },
+        },
+      },
+      delegation_chain: [
+        { delegator: "admin", delegate: "agent-001", scope_restriction: {} },
+      ],
+    } as Partial<PoACredential>);
+
+    const req = makeRequest({
+      action: { verb: "foundry.agent.delegate", resource: "agent-002" },
+    });
+
+    const result = await enforceAction(req, poa);
+    if (!isEnforcementError(result)) {
+      const chk09 = result.checks.find(c => c.check_id === "CHK-09");
+      expect(chk09).toBeDefined();
+      expect(chk09?.result).toBe("pass");
+    }
+  });
+});

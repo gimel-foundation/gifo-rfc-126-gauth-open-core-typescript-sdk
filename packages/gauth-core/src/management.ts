@@ -25,6 +25,7 @@ import type {
   GovernanceProfile,
   GovernanceProfileCeiling,
   PoAScope,
+  PoaMapSummary,
 } from "./types.js";
 import {
   MGMT_ERROR_CODES,
@@ -698,6 +699,12 @@ export class ManagementAPI {
     const escalationError = this.validateDelegationSubset(parent, request);
     if (escalationError) return escalationError;
 
+    const approvalMode = parent.requirements.approval_mode;
+    let childStatus: "DRAFT" | "PENDING_APPROVAL" = "DRAFT";
+    if (approvalMode === "supervised" || approvalMode === "four-eyes") {
+      childStatus = "PENDING_APPROVAL";
+    }
+
     const childVerbs: Record<string, import("./types.js").ToolPolicy> = {};
     const restrictionVerbs = request.scope_restriction.core_verbs;
     if (restrictionVerbs) {
@@ -746,7 +753,7 @@ export class ManagementAPI {
 
     const childMandate: MandateDetail = {
       mandate_id: childId,
-      status: "DRAFT",
+      status: childStatus,
       parties: {
         ...parent.parties,
         subject: request.delegate_agent_id,
@@ -778,10 +785,119 @@ export class ManagementAPI {
     return {
       child_mandate_id: childId,
       parent_mandate_id: request.parent_mandate_id,
-      status: "DRAFT",
+      status: childStatus,
       delegation_depth: currentDepth + 1,
       scope_checksum: scopeChecksum,
       audit: auditEntry,
+    };
+  }
+
+  async approveDelegation(
+    mandateId: string,
+    approvedBy: string,
+  ): Promise<{ mandate_id: string; status: "DRAFT"; audit: MandateAuditEntry } | ManagementError> {
+    const mandate = await this.store.get(mandateId);
+    if (!mandate) return this.notFound(mandateId);
+
+    if (mandate.status !== "PENDING_APPROVAL") {
+      return this.invalidTransition(mandateId, mandate.status, "DRAFT");
+    }
+
+    if (!this.hasAuthority(approvedBy, mandate)) {
+      return {
+        error_code: MGMT_ERROR_CODES.INSUFFICIENT_AUTHORITY,
+        message: `User '${approvedBy}' does not have approval authority.`,
+        timestamp: new Date().toISOString(),
+        mandate_id: mandateId,
+      };
+    }
+
+    if (mandate.requirements.approval_mode === "four-eyes") {
+      const delegateEntry = mandate.audit_trail.find((e) => e.operation === "DELEGATE");
+      if (delegateEntry && delegateEntry.performed_by === approvedBy) {
+        return {
+          error_code: MGMT_ERROR_CODES.INSUFFICIENT_AUTHORITY,
+          message: "Four-eyes mode: approver must differ from the delegator.",
+          timestamp: new Date().toISOString(),
+          mandate_id: mandateId,
+        };
+      }
+    }
+
+    mandate.status = "DRAFT";
+    const auditEntry: MandateAuditEntry = {
+      operation: "APPROVE_DELEGATION",
+      performed_by: approvedBy,
+      timestamp: new Date().toISOString(),
+      mandate_id: mandateId,
+    };
+    mandate.audit_trail.push(auditEntry);
+    await this.store.update(mandate);
+
+    return { mandate_id: mandateId, status: "DRAFT", audit: auditEntry };
+  }
+
+  async generatePoaMap(mandateId: string): Promise<PoaMapSummary | ManagementError> {
+    const mandate = await this.store.get(mandateId);
+    if (!mandate) return this.notFound(mandateId);
+
+    const allowedVerbs: string[] = [];
+    const deniedVerbs: string[] = [];
+    const effectiveConstraints: Record<string, Record<string, unknown>> = {};
+
+    for (const [verb, policy] of Object.entries(mandate.scope.core_verbs)) {
+      if (policy.allowed) {
+        allowedVerbs.push(verb);
+        if (policy.constraints) {
+          effectiveConstraints[verb] = policy.constraints as Record<string, unknown>;
+        }
+      } else {
+        deniedVerbs.push(verb);
+      }
+    }
+
+    const delegatePolicy = mandate.scope.core_verbs["foundry.agent.delegate"];
+    const maxDelegationDepth = delegatePolicy?.constraints?.max_delegation_depth ?? 0;
+
+    const platformPermsSummary: Record<string, boolean> = {};
+    if (mandate.scope.platform_permissions) {
+      const pp = mandate.scope.platform_permissions;
+      if (pp.deployment) {
+        platformPermsSummary["deployment.auto_deploy"] = pp.deployment.auto_deploy ?? false;
+      }
+      if (pp.database) {
+        platformPermsSummary["database.read"] = pp.database.read ?? false;
+        platformPermsSummary["database.write"] = pp.database.write ?? false;
+        platformPermsSummary["database.migrate"] = pp.database.migrate ?? false;
+        platformPermsSummary["database.production_access"] = pp.database.production_access ?? false;
+      }
+      if (pp.secrets) {
+        platformPermsSummary["secrets.read"] = pp.secrets.read ?? false;
+        platformPermsSummary["secrets.create"] = pp.secrets.create ?? false;
+      }
+    }
+
+    return {
+      mandate_id: mandate.mandate_id,
+      subject: mandate.parties.subject,
+      governance_profile: mandate.scope.governance_profile,
+      phase: mandate.scope.phase,
+      allowed_verbs: allowedVerbs,
+      denied_verbs: deniedVerbs,
+      allowed_paths: mandate.scope.allowed_paths ?? [],
+      denied_paths: mandate.scope.denied_paths ?? [],
+      allowed_regions: mandate.scope.allowed_regions ?? [],
+      allowed_sectors: mandate.scope.allowed_sectors ?? [],
+      budget: mandate.requirements.budget
+        ? { total_cents: mandate.requirements.budget.total_cents, remaining_cents: mandate.requirements.budget.remaining_cents ?? mandate.requirements.budget.total_cents }
+        : null,
+      ttl_seconds: mandate.requirements.ttl_seconds ?? null,
+      delegation_depth: mandate.delegation_chain.length,
+      max_delegation_depth: maxDelegationDepth,
+      approval_mode: mandate.requirements.approval_mode,
+      platform_permissions_summary: platformPermsSummary,
+      effective_constraints: effectiveConstraints,
+      generated_at: new Date().toISOString(),
     };
   }
 

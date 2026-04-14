@@ -13,12 +13,14 @@ import type {
   TariffGateResult,
   SealedAdapterManifest,
   CustomerLicenseState,
+  ComplianceAuditEntry,
 } from "./types.js";
 import {
   DEFAULT_GOVERNANCE_CEILINGS,
   CONNECTOR_SLOT_CONFIGS,
   DEPLOYMENT_POLICY_MATRIX,
   DEFAULT_CUSTOMER_LICENSE_STATE,
+  tariffEffectiveLevel,
 } from "./types.js";
 
 export interface PolicyDecisionAdapter {
@@ -238,6 +240,7 @@ export interface ConnectorSlotState {
 export class ConnectorSlotRegistry {
   private slots = new Map<ConnectorSlotName, ConnectorSlotState>();
   private tariff: TariffCode;
+  private complianceLog: ComplianceAuditEntry[] = [];
 
   constructor(tariff: TariffCode = "O") {
     this.tariff = tariff;
@@ -257,15 +260,20 @@ export class ConnectorSlotRegistry {
     }
   }
 
+  private resolveEffectiveTariff(): "O" | "S" | "M" | "L" {
+    return tariffEffectiveLevel(this.tariff);
+  }
+
   checkTariffGate(slotName: ConnectorSlotName): TariffGateResult {
-    const availability = DEPLOYMENT_POLICY_MATRIX[slotName][this.tariff];
+    const effective = this.resolveEffectiveTariff();
+    const availability = DEPLOYMENT_POLICY_MATRIX[slotName][effective];
 
     if (availability === "null") {
       return { allowed: false, reason: "Slot not available for tariff", availability };
     }
 
     const config = CONNECTOR_SLOT_CONFIGS[slotName];
-    if (config.adapterType === "C" && (this.tariff === "O" || this.tariff === "S")) {
+    if (config.adapterType === "C" && (effective === "O" || effective === "S")) {
       return { allowed: false, reason: "Type C requires tariff M or higher", availability };
     }
 
@@ -304,12 +312,28 @@ export class ConnectorSlotRegistry {
     const config = CONNECTOR_SLOT_CONFIGS[slotName];
     const slot = this.slots.get(slotName)!;
 
-    if (config.adapterType === "C" && !slot.attestationSatisfied) {
-      slot.adapter = adapter;
-      slot.implementationLabel = implementationLabel;
-      slot.registeredAt = new Date().toISOString();
-      slot.status = "pending";
-      return { success: true };
+    if (config.adapterType === "C") {
+      if ("packageNamespace" in adapter) {
+        const ns = (adapter as { packageNamespace: string }).packageNamespace;
+        if (!ns.startsWith("@gimel/")) {
+          this.logCompliance({
+            timestamp: new Date().toISOString(),
+            event_type: "LICENSE_COMPLIANCE_VIOLATION",
+            slot_name: slotName,
+            tariff: this.tariff,
+            detail: `Type C adapter '${adapter.name}' namespace '${ns}' must start with @gimel/.`,
+          });
+          return { success: false, error: `Type C adapter namespace must start with @gimel/; got '${ns}'` };
+        }
+      }
+
+      if (!slot.attestationSatisfied) {
+        slot.adapter = adapter;
+        slot.implementationLabel = implementationLabel;
+        slot.registeredAt = new Date().toISOString();
+        slot.status = "pending";
+        return { success: true };
+      }
     }
 
     slot.adapter = adapter;
@@ -337,10 +361,24 @@ export class ConnectorSlotRegistry {
     return { success: true };
   }
 
-  satisfyAttestation(slotName: ConnectorSlotName): { success: boolean; error?: string } {
+  satisfyAttestation(slotName: ConnectorSlotName, manifest?: SealedAdapterManifest): { success: boolean; error?: string } {
     const config = CONNECTOR_SLOT_CONFIGS[slotName];
     if (!config.attestationRequired) {
       return { success: false, error: `Slot ${slotName} does not require attestation` };
+    }
+
+    if (manifest) {
+      const validationError = this.validateManifest(manifest, slotName);
+      if (validationError) {
+        this.logCompliance({
+          timestamp: new Date().toISOString(),
+          event_type: "MANIFEST_VERIFICATION_FAILED",
+          slot_name: slotName,
+          tariff: this.tariff,
+          detail: validationError,
+        });
+        return { success: false, error: validationError };
+      }
     }
 
     const slot = this.slots.get(slotName)!;
@@ -351,12 +389,120 @@ export class ConnectorSlotRegistry {
     return { success: true };
   }
 
+  private validateManifest(manifest: SealedAdapterManifest, slotName: ConnectorSlotName): string | null {
+    if (manifest.manifest_version !== "1.0") {
+      return `Invalid manifest version: '${manifest.manifest_version}'; expected '1.0'.`;
+    }
+    if (manifest.adapter_type !== "C") {
+      return `Manifest adapter_type must be 'C'; got '${manifest.adapter_type}'.`;
+    }
+    if (manifest.slot_name !== slotName) {
+      return `Manifest slot_name '${manifest.slot_name}' does not match target slot '${slotName}'.`;
+    }
+    if (!manifest.namespace.startsWith("@gimel/")) {
+      return `Manifest namespace '${manifest.namespace}' must start with '@gimel/'.`;
+    }
+    if (manifest.issuer !== "gimel-foundation") {
+      return `Manifest issuer must be 'gimel-foundation'; got '${manifest.issuer}'.`;
+    }
+    const now = new Date();
+    const issuedAt = new Date(manifest.issued_at);
+    const expiresAt = new Date(manifest.expires_at);
+    if (isNaN(issuedAt.getTime()) || isNaN(expiresAt.getTime())) {
+      return "Manifest has invalid temporal fields.";
+    }
+    if (expiresAt < now) {
+      return `Manifest has expired (expires_at: ${manifest.expires_at}).`;
+    }
+    if (issuedAt > now) {
+      return `Manifest issued_at is in the future (${manifest.issued_at}).`;
+    }
+    if (!manifest.signature || manifest.signature.length < 64) {
+      return "Manifest signature is missing or too short for Ed25519.";
+    }
+    return null;
+  }
+
   acceptLicense(slotName: ConnectorSlotName, licenseVersion: string): { success: boolean; error?: string } {
     const slot = this.slots.get(slotName)!;
     slot.licenseType = "gimel_tos";
     slot.licenseAcceptedAt = new Date().toISOString();
     slot.licenseVersion = licenseVersion;
     return { success: true };
+  }
+
+  setTariff(newTariff: TariffCode): { deactivated: ConnectorSlotName[] } {
+    const oldTariff = this.tariff;
+    this.tariff = newTariff;
+
+    const deactivated: ConnectorSlotName[] = [];
+    const newEffective = tariffEffectiveLevel(newTariff);
+    const oldEffective = tariffEffectiveLevel(oldTariff);
+    const TIER_ORDER: Record<string, number> = { O: 0, S: 1, M: 2, L: 3 };
+
+    if (TIER_ORDER[newEffective] < TIER_ORDER[oldEffective]) {
+      this.logCompliance({
+        timestamp: new Date().toISOString(),
+        event_type: "TARIFF_DOWNGRADE",
+        tariff: newTariff,
+        detail: `Tariff downgraded from ${oldTariff} (effective ${oldEffective}) to ${newTariff} (effective ${newEffective}).`,
+      });
+
+      for (const [slotName, slot] of this.slots) {
+        if (slot.status === "null" || !slot.adapter) continue;
+        const gate = this.checkTariffGate(slotName);
+        if (!gate.allowed || gate.availability === "null") {
+          slot.status = "null";
+          slot.adapter = null;
+          slot.attestationSatisfied = false;
+          deactivated.push(slotName);
+          this.logCompliance({
+            timestamp: new Date().toISOString(),
+            event_type: "ADAPTER_DEACTIVATED",
+            slot_name: slotName,
+            tariff: newTariff,
+            detail: `Adapter deactivated in slot '${slotName}' due to tariff downgrade to ${newTariff}.`,
+          });
+        }
+      }
+    }
+
+    return { deactivated };
+  }
+
+  checkLicenseCompliance(): ComplianceAuditEntry[] {
+    const violations: ComplianceAuditEntry[] = [];
+    const effective = this.resolveEffectiveTariff();
+
+    for (const [slotName, slot] of this.slots) {
+      if (slot.status === "null" || !slot.adapter) continue;
+      const config = CONNECTOR_SLOT_CONFIGS[slotName];
+
+      if (config.adapterType === "C" && effective === "O") {
+        const isNoOp = slot.adapter.name.startsWith("noop-");
+        if (!isNoOp) {
+          const entry: ComplianceAuditEntry = {
+            timestamp: new Date().toISOString(),
+            event_type: "LICENSE_COMPLIANCE_VIOLATION",
+            slot_name: slotName,
+            tariff: this.tariff,
+            detail: `Non-NoOp Type C adapter '${slot.adapter.name}' registered at tariff ${this.tariff} (effective O). Type C requires tariff M or higher.`,
+          };
+          violations.push(entry);
+          this.complianceLog.push(entry);
+        }
+      }
+    }
+
+    return violations;
+  }
+
+  getComplianceLog(): ComplianceAuditEntry[] {
+    return [...this.complianceLog];
+  }
+
+  private logCompliance(entry: ComplianceAuditEntry): void {
+    this.complianceLog.push(entry);
   }
 
   getSlotStatus(slotName: ConnectorSlotName): ConnectorSlotState {
