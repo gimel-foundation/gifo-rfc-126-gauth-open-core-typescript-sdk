@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, timingSafeEqual, verify, createPublicKey } from "node:crypto";
 import type {
   PoACredential,
   GAuthJWTClaims,
@@ -433,7 +433,75 @@ export class ConnectorSlotRegistry {
     if (!manifest.signature || manifest.signature.length < 64) {
       return "Manifest signature is missing or too short for Ed25519.";
     }
+
+    const sigVerifyResult = this.verifyEd25519Signature(manifest);
+    if (sigVerifyResult) return sigVerifyResult;
+
     return null;
+  }
+
+  private verifyEd25519Signature(manifest: SealedAdapterManifest): string | null {
+    try {
+      const canonicalPayload = JSON.stringify({
+        manifest_version: manifest.manifest_version,
+        adapter_name: manifest.adapter_name,
+        adapter_type: manifest.adapter_type,
+        adapter_version: manifest.adapter_version,
+        slot_name: manifest.slot_name,
+        namespace: manifest.namespace,
+        issued_at: manifest.issued_at,
+        expires_at: manifest.expires_at,
+        issuer: manifest.issuer,
+        ...(manifest.capabilities ? { capabilities: manifest.capabilities } : {}),
+        ...(manifest.checksum ? { checksum: manifest.checksum } : {}),
+      });
+
+      const signatureBytes = Buffer.from(manifest.signature, "hex");
+      if (signatureBytes.length !== 64) {
+        return `Ed25519 signature must be 64 bytes; got ${signatureBytes.length}.`;
+      }
+
+      let publicKeyObj;
+      try {
+        publicKeyObj = createPublicKey({
+          key: Buffer.from(manifest.public_key, "hex"),
+          format: "der",
+          type: "spki",
+        });
+      } catch {
+        try {
+          const raw = Buffer.from(manifest.public_key, "base64url");
+          if (raw.length === 32) {
+            const ed25519Prefix = Buffer.from("302a300506032b6570032100", "hex");
+            const derKey = Buffer.concat([ed25519Prefix, raw]);
+            publicKeyObj = createPublicKey({
+              key: derKey,
+              format: "der",
+              type: "spki",
+            });
+          } else {
+            return `Ed25519 public key has invalid length: ${raw.length} bytes (expected 32).`;
+          }
+        } catch {
+          return "Unable to parse Ed25519 public key from manifest.";
+        }
+      }
+
+      const valid = verify(
+        null,
+        Buffer.from(canonicalPayload),
+        publicKeyObj,
+        signatureBytes,
+      );
+
+      if (!valid) {
+        return "Ed25519 signature verification failed: signature does not match canonical payload.";
+      }
+
+      return null;
+    } catch (err) {
+      return `Ed25519 signature verification error: ${err instanceof Error ? err.message : String(err)}`;
+    }
   }
 
   acceptLicense(slotName: ConnectorSlotName, licenseVersion: string): { success: boolean; error?: string } {

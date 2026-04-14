@@ -635,3 +635,91 @@ describe("CT-PEP: CHK-09 max_delegation_depth cross-reference", () => {
     }
   });
 });
+
+describe("CT-PEP: OAuth adapter integration", () => {
+  it("CT-PEP-037: denies when OAuth adapter rejects token", async () => {
+    const poa = makePoa();
+    const header = Buffer.from(JSON.stringify({ alg: "EdDSA", typ: "JWT" })).toString("base64url");
+    const payload = Buffer.from(JSON.stringify({ sub: "agent-001" })).toString("base64url");
+    const sig = Buffer.from("fakesig").toString("base64url");
+    const token = `${header}.${payload}.${sig}`;
+
+    const req = makeRequest({
+      credential: { format: "jwt", token, poa_snapshot: {
+        scope: poa.scope,
+        parties: poa.parties,
+        requirements: poa.requirements,
+      } },
+    });
+
+    const mockAdapter = {
+      async validateToken(_t: string) { return { valid: false, reason: "Token revoked" }; },
+    };
+
+    const result = await enforceAction(req, poa, { oauthAdapter: mockAdapter });
+    if (!isEnforcementError(result)) {
+      expect(result.decision).toBe("DENY");
+      const adapterCheck = result.checks.find(c => c.detail?.includes("OAuth adapter rejected"));
+      expect(adapterCheck).toBeDefined();
+      expect(adapterCheck?.result).toBe("fail");
+    }
+  });
+
+  it("CT-PEP-038: passes when OAuth adapter accepts token", async () => {
+    const poa = makePoa();
+    const header = Buffer.from(JSON.stringify({ alg: "EdDSA", typ: "JWT" })).toString("base64url");
+    const payload = Buffer.from(JSON.stringify({ sub: "agent-001" })).toString("base64url");
+    const sig = Buffer.from("fakesig").toString("base64url");
+    const token = `${header}.${payload}.${sig}`;
+
+    const req = makeRequest({
+      credential: { format: "jwt", token, poa_snapshot: {
+        scope: poa.scope,
+        parties: poa.parties,
+        requirements: poa.requirements,
+      } },
+    });
+
+    const mockAdapter = {
+      async validateToken(_t: string) { return { valid: true }; },
+    };
+
+    const result = await enforceAction(req, poa, { oauthAdapter: mockAdapter });
+    if (!isEnforcementError(result)) {
+      expect(result.decision).toBe("PERMIT");
+    }
+  });
+});
+
+describe("CT-PEP: License compliance at PEP level", () => {
+  it("CT-PEP-039: denies when connector registry reports license violations", async () => {
+    const poa = makePoa();
+    const req = makeRequest();
+
+    const mockRegistry = {
+      checkLicenseCompliance() {
+        return [{ slot: "ai_governance", violation: "Adapter not attested" }];
+      },
+    };
+
+    const result = await enforceAction(req, poa, { connectorRegistry: mockRegistry });
+    if (!isEnforcementError(result)) {
+      expect(result.decision).toBe("DENY");
+      expect(result.checks.some(c => c.detail?.includes("License compliance violations"))).toBe(true);
+    }
+  });
+
+  it("CT-PEP-040: permits when connector registry is clean", async () => {
+    const poa = makePoa();
+    const req = makeRequest();
+
+    const mockRegistry = {
+      checkLicenseCompliance() { return []; },
+    };
+
+    const result = await enforceAction(req, poa, { connectorRegistry: mockRegistry });
+    if (!isEnforcementError(result)) {
+      expect(result.decision).toBe("PERMIT");
+    }
+  });
+});

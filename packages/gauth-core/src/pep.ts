@@ -35,6 +35,8 @@ export interface PEPOptions {
   serviceUri?: string;
   strictSectorMode?: boolean;
   strictRegionMode?: boolean;
+  oauthAdapter?: { validateToken(token: string): Promise<{ valid: boolean; reason?: string }> };
+  connectorRegistry?: { checkLicenseCompliance(): Array<{ slot: string; violation: string }> };
 }
 
 interface ParsedCredential {
@@ -184,6 +186,45 @@ export async function enforceAction(
     const constraints: EnforcedConstraint[] = [];
     const isStateful = !!request.context?.live_mandate_state;
 
+    if (opts.connectorRegistry) {
+      const licenseViolations = opts.connectorRegistry.checkLicenseCompliance();
+      if (licenseViolations.length > 0) {
+        const detail = licenseViolations.map(v => `${v.slot}: ${v.violation}`).join("; ");
+        const licCheck = makeCheckResult("CHK-00", "License Compliance", "fail", `License compliance violations: ${detail}`, VIOLATION_CODES.CREDENTIAL_INVALID);
+        checks.push(licCheck);
+        violations.push({
+          code: VIOLATION_CODES.CREDENTIAL_INVALID,
+          message: `License compliance check failed: ${detail}`,
+          check_id: "CHK-00",
+          severity: "error",
+        });
+        const processingTime = performance.now() - startTime;
+        const audit: AuditRecord = {
+          processing_time_ms: Math.round(processingTime * 100) / 100,
+          pep_version: SDK_VERSION,
+          pep_interface_version: PEP_INTERFACE_VERSION,
+          credential_jti: parsed.jti,
+          mandate_id: parsed.mandateId,
+          agent_id: request.agent.agent_id,
+          action_verb: request.action.verb,
+          action_resource: request.action.resource,
+          checks_performed: 1,
+          checks_passed: 0,
+          checks_failed: 1,
+        };
+        return {
+          request_id: request.request_id,
+          decision: "DENY",
+          timestamp: new Date().toISOString(),
+          enforcement_mode: isStateful ? "stateful" : "stateless",
+          checks,
+          enforced_constraints: [],
+          violations,
+          audit,
+        };
+      }
+    }
+
     if (request.credential.format === "jwt" && request.credential.token) {
       const oauthPreCheck = runOAuthPreValidation(request.credential.token, parsed);
       if (oauthPreCheck) {
@@ -220,6 +261,54 @@ export async function enforceAction(
             violations,
             audit,
           };
+        }
+      }
+
+      if (opts.oauthAdapter && oauthPreCheck?.result === "pass") {
+        try {
+          const adapterResult = await opts.oauthAdapter.validateToken(request.credential.token);
+          if (!adapterResult.valid) {
+            const adapterCheck = makeCheckResult(
+              "CHK-00",
+              "OAuth Adapter Validation",
+              "fail",
+              `OAuth adapter rejected token: ${adapterResult.reason ?? "unknown reason"}`,
+              VIOLATION_CODES.CREDENTIAL_INVALID,
+            );
+            checks.push(adapterCheck);
+            violations.push({
+              code: VIOLATION_CODES.CREDENTIAL_INVALID,
+              message: adapterCheck.detail ?? "OAuth adapter validation failed",
+              check_id: "CHK-00",
+              severity: "error",
+            });
+            const processingTime = performance.now() - startTime;
+            const audit: AuditRecord = {
+              processing_time_ms: Math.round(processingTime * 100) / 100,
+              pep_version: SDK_VERSION,
+              pep_interface_version: PEP_INTERFACE_VERSION,
+              credential_jti: parsed.jti,
+              mandate_id: parsed.mandateId,
+              agent_id: request.agent.agent_id,
+              action_verb: request.action.verb,
+              action_resource: request.action.resource,
+              checks_performed: checks.length,
+              checks_passed: checks.filter(c => c.result === "pass").length,
+              checks_failed: checks.filter(c => c.result === "fail").length,
+            };
+            return {
+              request_id: request.request_id,
+              decision: "DENY",
+              timestamp: new Date().toISOString(),
+              enforcement_mode: isStateful ? "stateful" : "stateless",
+              checks,
+              enforced_constraints: [],
+              violations,
+              audit,
+            };
+          }
+        } catch {
+          // OAuth adapter error is non-fatal; structural check already passed
         }
       }
     }
