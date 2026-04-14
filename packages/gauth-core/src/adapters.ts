@@ -367,6 +367,20 @@ export class ConnectorSlotRegistry {
       return { success: false, error: `Slot ${slotName} does not require attestation` };
     }
 
+    const slot = this.slots.get(slotName)!;
+    const hasRealAdapter = slot.adapter && !slot.adapter.name.startsWith("noop-");
+
+    if (!manifest && hasRealAdapter) {
+      this.logCompliance({
+        timestamp: new Date().toISOString(),
+        event_type: "MANIFEST_VERIFICATION_FAILED",
+        slot_name: slotName,
+        tariff: this.tariff,
+        detail: "SealedAdapterManifest is required for non-NoOp Type C adapters.",
+      });
+      return { success: false, error: "SealedAdapterManifest is required for non-NoOp Type C adapters." };
+    }
+
     if (manifest) {
       const validationError = this.validateManifest(manifest, slotName);
       if (validationError) {
@@ -381,7 +395,6 @@ export class ConnectorSlotRegistry {
       }
     }
 
-    const slot = this.slots.get(slotName)!;
     slot.attestationSatisfied = true;
     if (slot.adapter && slot.status === "pending") {
       slot.status = "active";

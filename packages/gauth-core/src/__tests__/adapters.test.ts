@@ -645,6 +645,61 @@ describe("CT-REG: Tariff downgrade re-evaluation", () => {
   });
 });
 
+describe("CT-REG: Non-NoOp Type C attestation requires manifest", () => {
+  it("CT-REG-028: non-NoOp Type C adapter cannot satisfy attestation without manifest", () => {
+    const registry = new ConnectorSlotRegistry("M" as import("../types.js").TariffCode);
+    const realAdapter = {
+      adapterType: "C" as const,
+      name: "real-ai-governance",
+      packageNamespace: "@gimel/ai-governance",
+      async checkAccess() { return { allowed: true, reason: "" }; },
+      async getRecommendations() { return []; },
+      async healthCheck() { return { healthy: true, latencyMs: 0 }; },
+    };
+    registry.register("ai_governance", realAdapter, "real-gov-v1");
+    const result = registry.satisfyAttestation("ai_governance");
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("SealedAdapterManifest is required");
+  });
+
+  it("CT-REG-029: NoOp Type C adapter can satisfy attestation without manifest", () => {
+    const registry = new ConnectorSlotRegistry("M" as import("../types.js").TariffCode);
+    const adapter = new NoOpGovernanceAdapter();
+    registry.register("ai_governance", adapter, "noop-gov-v1");
+    const result = registry.satisfyAttestation("ai_governance");
+    expect(result.success).toBe(true);
+  });
+
+  it("CT-REG-030: non-NoOp Type C adapter succeeds attestation with valid manifest", () => {
+    const registry = new ConnectorSlotRegistry("M" as import("../types.js").TariffCode);
+    const realAdapter = {
+      adapterType: "C" as const,
+      name: "real-ai-governance",
+      packageNamespace: "@gimel/ai-governance",
+      async checkAccess() { return { allowed: true, reason: "" }; },
+      async getRecommendations() { return []; },
+      async healthCheck() { return { healthy: true, latencyMs: 0 }; },
+    };
+    registry.register("ai_governance", realAdapter, "real-gov-v1");
+    const validManifest = {
+      manifest_version: "1.0" as const,
+      adapter_name: "real-ai-governance",
+      adapter_type: "C" as const,
+      adapter_version: "1.0.0",
+      slot_name: "ai_governance" as const,
+      namespace: "@gimel/ai-governance",
+      issued_at: new Date(Date.now() - 60000).toISOString(),
+      expires_at: new Date(Date.now() + 86400000).toISOString(),
+      issuer: "gimel-foundation" as const,
+      public_key: "test-key",
+      signature: "a".repeat(128),
+    };
+    const result = registry.satisfyAttestation("ai_governance", validManifest);
+    expect(result.success).toBe(true);
+    expect(registry.getSlotStatus("ai_governance").status).toBe("active");
+  });
+});
+
 describe("CT-LIC: License compliance checks", () => {
   it("CT-LIC-010: checkLicenseCompliance detects non-NoOp Type C at tariff O", () => {
     const registry = new ConnectorSlotRegistry("M" as import("../types.js").TariffCode);
