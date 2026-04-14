@@ -149,6 +149,7 @@ export {
   AdapterRegistry,
   AdapterRegistrationError,
   ConnectorSlotRegistry,
+  type TrustKeyEntry,
   NoOpPolicyDecisionAdapter,
   NoOpOAuthEngineAdapter,
   NoOpFoundryAdapter,

@@ -1,3 +1,22 @@
+/**
+ * W3C Verifiable Credentials Translation Layer — Reference Scaffold v0.91.0
+ *
+ * This module provides structural helpers for PoA↔W3C VC translation, including
+ * credential/presentation building, proof attachment, DID parsing, selective
+ * disclosure framing, and OpenID4VCI/VP request construction.
+ *
+ * Scope for v0.91.0 Public Preview:
+ * - Structural serialization and type-safe builders (not full protocol flows)
+ * - DID resolution is local string parsing (no network DID document retrieval)
+ * - Data Integrity Proofs use eddsa-rdfc-2022 suite identifier (proof generation
+ *   and verification require external cryptographic provider integration)
+ * - SD-JWT helpers produce disclosure frames (actual JWT signing is external)
+ * - OpenID4VCI/VP helpers produce request/offer structures (protocol transport
+ *   and token exchange are external)
+ *
+ * Full W3C VC conformance (DID resolution, proof verification, credential
+ * status checking, OpenID4VP response validation) is planned for v1.0.0.
+ */
 import type {
   PoACredential,
   MandateDetail,

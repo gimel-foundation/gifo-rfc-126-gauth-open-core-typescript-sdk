@@ -237,13 +237,24 @@ export interface ConnectorSlotState {
   licenseVersion: string | null;
 }
 
+export interface TrustKeyEntry {
+  public_key_hex: string;
+  issuer: string;
+  valid_from?: string;
+  valid_until?: string;
+}
+
 export class ConnectorSlotRegistry {
   private slots = new Map<ConnectorSlotName, ConnectorSlotState>();
   private tariff: TariffCode;
   private complianceLog: ComplianceAuditEntry[] = [];
+  private trustKeys: TrustKeyEntry[] = [];
 
-  constructor(tariff: TariffCode = "O") {
+  constructor(tariff: TariffCode = "O", trustKeys?: TrustKeyEntry[]) {
     this.tariff = tariff;
+    if (trustKeys) {
+      this.trustKeys = trustKeys;
+    }
     const slotNames: ConnectorSlotName[] = ["pdp", "oauth_engine", "foundry", "wallet", "ai_governance", "web3_identity", "dna_identity"];
     for (const name of slotNames) {
       this.slots.set(name, {
@@ -329,6 +340,17 @@ export class ConnectorSlotRegistry {
       }
 
       if (!isNoOp && manifest) {
+        const bindingError = this.validateManifestAdapterBinding(manifest, adapter);
+        if (bindingError) {
+          this.logCompliance({
+            timestamp: new Date().toISOString(),
+            event_type: "MANIFEST_BINDING_FAILED",
+            slot_name: slotName,
+            tariff: this.tariff,
+            detail: bindingError,
+          });
+          return { success: false, error: bindingError };
+        }
         const validationError = this.validateManifest(manifest, slotName);
         if (validationError) {
           this.logCompliance({
@@ -413,6 +435,19 @@ export class ConnectorSlotRegistry {
     }
 
     if (manifest) {
+      if (hasRealAdapter && slot.adapter) {
+        const bindingError = this.validateManifestAdapterBinding(manifest, slot.adapter);
+        if (bindingError) {
+          this.logCompliance({
+            timestamp: new Date().toISOString(),
+            event_type: "MANIFEST_BINDING_FAILED",
+            slot_name: slotName,
+            tariff: this.tariff,
+            detail: bindingError,
+          });
+          return { success: false, error: bindingError };
+        }
+      }
       const validationError = this.validateManifest(manifest, slotName);
       if (validationError) {
         this.logCompliance({
@@ -471,6 +506,35 @@ export class ConnectorSlotRegistry {
     return null;
   }
 
+  private validateManifestAdapterBinding(manifest: SealedAdapterManifest, adapter: GAuthAdapter): string | null {
+    if (manifest.adapter_name !== adapter.name) {
+      return `Manifest adapter_name '${manifest.adapter_name}' does not match registered adapter name '${adapter.name}'.`;
+    }
+    if ("packageNamespace" in adapter) {
+      const ns = (adapter as { packageNamespace: string }).packageNamespace;
+      if (manifest.namespace !== ns) {
+        return `Manifest namespace '${manifest.namespace}' does not match adapter packageNamespace '${ns}'.`;
+      }
+    }
+    return null;
+  }
+
+  private resolveVerificationKey(manifest: SealedAdapterManifest): { publicKeyHex: string } | { error: string } {
+    if (this.trustKeys.length > 0) {
+      const matchingKey = this.trustKeys.find(tk => {
+        if (tk.issuer !== manifest.issuer) return false;
+        if (tk.valid_from && new Date(tk.valid_from) > new Date()) return false;
+        if (tk.valid_until && new Date(tk.valid_until) < new Date()) return false;
+        return true;
+      });
+      if (!matchingKey) {
+        return { error: `No pinned trust key found for issuer '${manifest.issuer}'. Manifest public_key is not trusted without a pinned key.` };
+      }
+      return { publicKeyHex: matchingKey.public_key_hex };
+    }
+    return { publicKeyHex: manifest.public_key };
+  }
+
   private verifyEd25519Signature(manifest: SealedAdapterManifest): string | null {
     try {
       const canonicalPayload = JSON.stringify({
@@ -492,16 +556,21 @@ export class ConnectorSlotRegistry {
         return `Ed25519 signature must be 64 bytes; got ${signatureBytes.length}.`;
       }
 
+      const keyResolution = this.resolveVerificationKey(manifest);
+      if ("error" in keyResolution) {
+        return keyResolution.error;
+      }
+
       let publicKeyObj;
       try {
         publicKeyObj = createPublicKey({
-          key: Buffer.from(manifest.public_key, "hex"),
+          key: Buffer.from(keyResolution.publicKeyHex, "hex"),
           format: "der",
           type: "spki",
         });
       } catch {
         try {
-          const raw = Buffer.from(manifest.public_key, "base64url");
+          const raw = Buffer.from(keyResolution.publicKeyHex, "base64url");
           if (raw.length === 32) {
             const ed25519Prefix = Buffer.from("302a300506032b6570032100", "hex");
             const derKey = Buffer.concat([ed25519Prefix, raw]);
@@ -514,7 +583,7 @@ export class ConnectorSlotRegistry {
             return `Ed25519 public key has invalid length: ${raw.length} bytes (expected 32).`;
           }
         } catch {
-          return "Unable to parse Ed25519 public key from manifest.";
+          return "Unable to parse Ed25519 public key.";
         }
       }
 

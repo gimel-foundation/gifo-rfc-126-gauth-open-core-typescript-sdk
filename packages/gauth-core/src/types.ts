@@ -922,7 +922,7 @@ export interface PoaMapSummary {
 
 export interface ComplianceAuditEntry {
   timestamp: string;
-  event_type: "LICENSE_COMPLIANCE_VIOLATION" | "TARIFF_DOWNGRADE" | "ADAPTER_DEACTIVATED" | "MANIFEST_VERIFICATION_FAILED";
+  event_type: "LICENSE_COMPLIANCE_VIOLATION" | "TARIFF_DOWNGRADE" | "ADAPTER_DEACTIVATED" | "MANIFEST_VERIFICATION_FAILED" | "MANIFEST_BINDING_FAILED";
   slot_name?: ConnectorSlotName;
   tariff?: TariffCode;
   detail: string;
