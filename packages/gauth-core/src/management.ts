@@ -1036,9 +1036,6 @@ export class ManagementAPI {
       merged.path_patterns = parentConstraints.path_patterns
         ? parentConstraints.path_patterns.filter(p => childConstraints.path_patterns!.includes(p))
         : childConstraints.path_patterns;
-      if (merged.path_patterns.length === 0 && childConstraints.path_patterns.length > 0) {
-        merged.path_patterns = childConstraints.path_patterns;
-      }
     }
     if (childConstraints.allowed_commands) {
       merged.allowed_commands = parentConstraints.allowed_commands
