@@ -716,6 +716,22 @@ describe("CT-REG: Non-NoOp Type C attestation requires manifest", () => {
     expect(result.error).toContain("SealedAdapterManifest is required");
   });
 
+  it("CT-REG-033: name-spoofed noop- adapter still requires manifest", () => {
+    const registry = new ConnectorSlotRegistry("M" as import("../types.js").TariffCode);
+    const spoofedAdapter = {
+      adapterType: "C" as const,
+      name: "noop-spoofed-governance",
+      packageNamespace: "@gimel/ai-governance",
+      async checkAccess() { return { allowed: true, reason: "" }; },
+      async getRecommendations() { return []; },
+      async healthCheck() { return { healthy: true, latencyMs: 0 }; },
+    };
+    registry.register("ai_governance", spoofedAdapter, "spoofed-v1");
+    const result = registry.satisfyAttestation("ai_governance");
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("SealedAdapterManifest is required");
+  });
+
   it("CT-REG-029: NoOp Type C adapter can satisfy attestation without manifest", () => {
     const registry = new ConnectorSlotRegistry("M" as import("../types.js").TariffCode);
     const adapter = new NoOpGovernanceAdapter();

@@ -812,17 +812,19 @@ describe("CT-MGMT: Delegation approval gate", () => {
     expect(isManagementError(approval)).toBe(false);
     if (!isManagementError(approval)) {
       expect(approval.status).toBe("DRAFT");
+      expect(approval.remaining_approvals).toBe(0);
+      expect(approval.approved_by).toContain("admin@example.com");
     }
   });
 
-  it("CT-MGMT-030: four-eyes delegation requires different approver", async () => {
+  it("CT-MGMT-030: four-eyes delegation requires two distinct approvers", async () => {
     const parent = await api.createMandate(makeCreateRequest({
       parties: {
         subject: "agent-001",
         customer_id: "cust-123",
         project_id: "proj-456",
         issued_by: "admin@example.com",
-        approval_chain: ["admin@example.com", "reviewer@example.com"],
+        approval_chain: ["admin@example.com", "reviewer@example.com", "auditor@example.com"],
       },
       scope: {
         governance_profile: "enterprise",
@@ -856,8 +858,27 @@ describe("CT-MGMT: Delegation approval gate", () => {
       expect(samePersonApproval.message).toContain("Four-eyes");
     }
 
-    const differentPersonApproval = await api.approveDelegation(delegation.child_mandate_id, "reviewer@example.com");
-    expect(isManagementError(differentPersonApproval)).toBe(false);
+    const firstApproval = await api.approveDelegation(delegation.child_mandate_id, "reviewer@example.com");
+    expect(isManagementError(firstApproval)).toBe(false);
+    if (!isManagementError(firstApproval)) {
+      expect(firstApproval.status).toBe("PENDING_APPROVAL");
+      expect(firstApproval.remaining_approvals).toBe(1);
+      expect(firstApproval.approved_by).toContain("reviewer@example.com");
+    }
+
+    const duplicateApproval = await api.approveDelegation(delegation.child_mandate_id, "reviewer@example.com");
+    expect(isManagementError(duplicateApproval)).toBe(true);
+    if (isManagementError(duplicateApproval)) {
+      expect(duplicateApproval.message).toContain("already approved");
+    }
+
+    const secondApproval = await api.approveDelegation(delegation.child_mandate_id, "auditor@example.com");
+    expect(isManagementError(secondApproval)).toBe(false);
+    if (!isManagementError(secondApproval)) {
+      expect(secondApproval.status).toBe("DRAFT");
+      expect(secondApproval.remaining_approvals).toBe(0);
+      expect(secondApproval.approved_by).toHaveLength(2);
+    }
   });
 });
 

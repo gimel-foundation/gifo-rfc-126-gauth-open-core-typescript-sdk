@@ -265,50 +265,54 @@ export async function enforceAction(
       }
 
       if (opts.oauthAdapter && oauthPreCheck?.result === "pass") {
+        let adapterValid = false;
+        let adapterReason = "OAuth adapter error";
         try {
           const adapterResult = await opts.oauthAdapter.validateToken(request.credential.token);
-          if (!adapterResult.valid) {
-            const adapterCheck = makeCheckResult(
-              "CHK-00",
-              "OAuth Adapter Validation",
-              "fail",
-              `OAuth adapter rejected token: ${adapterResult.reason ?? "unknown reason"}`,
-              VIOLATION_CODES.CREDENTIAL_INVALID,
-            );
-            checks.push(adapterCheck);
-            violations.push({
-              code: VIOLATION_CODES.CREDENTIAL_INVALID,
-              message: adapterCheck.detail ?? "OAuth adapter validation failed",
-              check_id: "CHK-00",
-              severity: "error",
-            });
-            const processingTime = performance.now() - startTime;
-            const audit: AuditRecord = {
-              processing_time_ms: Math.round(processingTime * 100) / 100,
-              pep_version: SDK_VERSION,
-              pep_interface_version: PEP_INTERFACE_VERSION,
-              credential_jti: parsed.jti,
-              mandate_id: parsed.mandateId,
-              agent_id: request.agent.agent_id,
-              action_verb: request.action.verb,
-              action_resource: request.action.resource,
-              checks_performed: checks.length,
-              checks_passed: checks.filter(c => c.result === "pass").length,
-              checks_failed: checks.filter(c => c.result === "fail").length,
-            };
-            return {
-              request_id: request.request_id,
-              decision: "DENY",
-              timestamp: new Date().toISOString(),
-              enforcement_mode: isStateful ? "stateful" : "stateless",
-              checks,
-              enforced_constraints: [],
-              violations,
-              audit,
-            };
-          }
-        } catch {
-          // OAuth adapter error is non-fatal; structural check already passed
+          adapterValid = adapterResult.valid;
+          adapterReason = adapterResult.reason ?? "unknown reason";
+        } catch (err) {
+          adapterReason = `OAuth adapter threw: ${err instanceof Error ? err.message : String(err)}`;
+        }
+        if (!adapterValid) {
+          const adapterCheck = makeCheckResult(
+            "CHK-00",
+            "OAuth Adapter Validation",
+            "fail",
+            `OAuth adapter rejected token: ${adapterReason}`,
+            VIOLATION_CODES.CREDENTIAL_INVALID,
+          );
+          checks.push(adapterCheck);
+          violations.push({
+            code: VIOLATION_CODES.CREDENTIAL_INVALID,
+            message: adapterCheck.detail ?? "OAuth adapter validation failed",
+            check_id: "CHK-00",
+            severity: "error",
+          });
+          const processingTime = performance.now() - startTime;
+          const audit: AuditRecord = {
+            processing_time_ms: Math.round(processingTime * 100) / 100,
+            pep_version: SDK_VERSION,
+            pep_interface_version: PEP_INTERFACE_VERSION,
+            credential_jti: parsed.jti,
+            mandate_id: parsed.mandateId,
+            agent_id: request.agent.agent_id,
+            action_verb: request.action.verb,
+            action_resource: request.action.resource,
+            checks_performed: checks.length,
+            checks_passed: checks.filter(c => c.result === "pass").length,
+            checks_failed: checks.filter(c => c.result === "fail").length,
+          };
+          return {
+            request_id: request.request_id,
+            decision: "DENY",
+            timestamp: new Date().toISOString(),
+            enforcement_mode: isStateful ? "stateful" : "stateless",
+            checks,
+            enforced_constraints: [],
+            violations,
+            audit,
+          };
         }
       }
     }

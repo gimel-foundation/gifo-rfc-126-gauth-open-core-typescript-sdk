@@ -795,7 +795,7 @@ export class ManagementAPI {
   async approveDelegation(
     mandateId: string,
     approvedBy: string,
-  ): Promise<{ mandate_id: string; status: "DRAFT"; audit: MandateAuditEntry } | ManagementError> {
+  ): Promise<{ mandate_id: string; status: "DRAFT" | "PENDING_APPROVAL"; approved_by: string[]; remaining_approvals: number; audit: MandateAuditEntry } | ManagementError> {
     const mandate = await this.store.get(mandateId);
     if (!mandate) return this.notFound(mandateId);
 
@@ -812,7 +812,9 @@ export class ManagementAPI {
       };
     }
 
-    if (mandate.requirements.approval_mode === "four-eyes") {
+    const isFourEyes = mandate.requirements.approval_mode === "four-eyes";
+
+    if (isFourEyes) {
       const delegateEntry = mandate.audit_trail.find((e) => e.operation === "DELEGATE");
       if (delegateEntry && delegateEntry.performed_by === approvedBy) {
         return {
@@ -822,9 +824,18 @@ export class ManagementAPI {
           mandate_id: mandateId,
         };
       }
+
+      const priorApprovals = mandate.audit_trail.filter((e) => e.operation === "APPROVE_DELEGATION");
+      if (priorApprovals.some((e) => e.performed_by === approvedBy)) {
+        return {
+          error_code: MGMT_ERROR_CODES.INSUFFICIENT_AUTHORITY,
+          message: "Four-eyes mode: this user has already approved this delegation.",
+          timestamp: new Date().toISOString(),
+          mandate_id: mandateId,
+        };
+      }
     }
 
-    mandate.status = "DRAFT";
     const auditEntry: MandateAuditEntry = {
       operation: "APPROVE_DELEGATION",
       performed_by: approvedBy,
@@ -832,9 +843,24 @@ export class ManagementAPI {
       mandate_id: mandateId,
     };
     mandate.audit_trail.push(auditEntry);
+
+    const allApprovals = mandate.audit_trail.filter((e) => e.operation === "APPROVE_DELEGATION");
+    const distinctApprovers = [...new Set(allApprovals.map((e) => e.performed_by))];
+    const requiredApprovals = isFourEyes ? 2 : 1;
+    const remainingApprovals = Math.max(0, requiredApprovals - distinctApprovers.length);
+
+    if (remainingApprovals === 0) {
+      mandate.status = "DRAFT";
+    }
     await this.store.update(mandate);
 
-    return { mandate_id: mandateId, status: "DRAFT", audit: auditEntry };
+    return {
+      mandate_id: mandateId,
+      status: mandate.status as "DRAFT" | "PENDING_APPROVAL",
+      approved_by: distinctApprovers,
+      remaining_approvals: remainingApprovals,
+      audit: auditEntry,
+    };
   }
 
   async generatePoaMap(mandateId: string): Promise<PoaMapSummary | ManagementError> {

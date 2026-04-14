@@ -368,7 +368,8 @@ export class ConnectorSlotRegistry {
     }
 
     const slot = this.slots.get(slotName)!;
-    const hasRealAdapter = slot.adapter && !slot.adapter.name.startsWith("noop-");
+    const isNoOpAdapter = slot.adapter && "__gauthNoOp" in slot.adapter && (slot.adapter as { __gauthNoOp: boolean }).__gauthNoOp === true;
+    const hasRealAdapter = slot.adapter && !isNoOpAdapter;
 
     if (!manifest && hasRealAdapter) {
       this.logCompliance({
@@ -720,6 +721,7 @@ export class NoOpGovernanceAdapter implements GovernanceAdapter {
   readonly adapterType = "C" as const;
   readonly name = "noop-ai-governance";
   readonly packageNamespace = "@gimel/ai-governance";
+  readonly __gauthNoOp = true as const;
 
   async checkAccess(): Promise<{ allowed: boolean; reason: string }> {
     return { allowed: true, reason: "NoOp Governance — AI second-pass skipped, rule-based only" };
@@ -738,6 +740,7 @@ export class NoOpWeb3IdentityAdapter implements Web3IdentityAdapter {
   readonly adapterType = "C" as const;
   readonly name = "noop-web3-identity";
   readonly packageNamespace = "@gimel/web3-identity";
+  readonly __gauthNoOp = true as const;
 
   async resolveIdentity(): Promise<null> {
     return null;
@@ -756,6 +759,7 @@ export class NoOpDNAIdentityAdapter implements DNAIdentityAdapter {
   readonly adapterType = "C" as const;
   readonly name = "noop-dna-identity";
   readonly packageNamespace = "@gimel/dna-identity";
+  readonly __gauthNoOp = true as const;
 
   async resolveIdentity(): Promise<null> {
     return null;
