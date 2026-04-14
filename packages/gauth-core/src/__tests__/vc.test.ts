@@ -161,7 +161,7 @@ describe("CT-CF: W3C VC Translation Layer", () => {
     );
 
     expect(proof.type).toBe("DataIntegrityProof");
-    expect(proof.cryptosuite).toBe("eddsa-rdfc-2022");
+    expect(proof.cryptosuite).toBe("ecdsa-rdfc-2019");
     expect(proof.proofPurpose).toBe("assertionMethod");
     expect(proof.proofValue).toBe("base64urlEncodedProofValue");
     expect(proof.created).toBeDefined();
@@ -189,11 +189,27 @@ describe("CT-CF: W3C VC Translation Layer", () => {
     expect(signed.proof!.proofValue).toBe("vpProof");
   });
 
-  it("CT-CF-011: resolveDid parses valid DID", () => {
+  it("CT-CF-011: resolveDid parses did:web DID", () => {
     const result = resolveDid("did:web:gauth.gimelid.com");
     expect(result).not.toBeNull();
     expect(result!.controller).toBe("did:web:gauth.gimelid.com");
+    expect(result!.type).toBe("JsonWebKey2020");
+  });
+
+  it("CT-CF-011b: resolveDid parses did:key Ed25519 DID", () => {
+    const result = resolveDid("did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK");
+    expect(result).not.toBeNull();
+    expect(result!.controller).toBe("did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK");
     expect(result!.type).toBe("Ed25519VerificationKey2020");
+    expect(result!.publicKeyMultibase).toBe("z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK");
+    expect(result!.id).toContain("#z6Mk");
+  });
+
+  it("CT-CF-011c: resolveDid parses did:key P-256 DID", () => {
+    const result = resolveDid("did:key:zDnaeWCdm62g2J3NSBMF3xEE4aJKqS6HWe3hYwi1oPYa1nJh");
+    expect(result).not.toBeNull();
+    expect(result!.type).toBe("EcdsaSecp256r1VerificationKey2019");
+    expect(result!.publicKeyMultibase).toBeDefined();
   });
 
   it("CT-CF-012: resolveDid returns null for invalid DID", () => {

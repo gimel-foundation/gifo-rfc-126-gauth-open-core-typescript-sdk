@@ -8,7 +8,7 @@
  * Scope for v0.91.0 Public Preview:
  * - Structural serialization and type-safe builders (not full protocol flows)
  * - DID resolution is local string parsing (no network DID document retrieval)
- * - Data Integrity Proofs use eddsa-rdfc-2022 suite identifier (proof generation
+ * - Data Integrity Proofs default to ecdsa-rdfc-2019 suite (proof generation
  *   and verification require external cryptographic provider integration)
  * - SD-JWT helpers produce disclosure frames (actual JWT signing is external)
  * - OpenID4VCI/VP helpers produce request/offer structures (protocol transport
@@ -146,7 +146,7 @@ export function createDataIntegrityProof(
 ): W3cDataIntegrityProof {
   return {
     type: "DataIntegrityProof",
-    cryptosuite: options?.cryptosuite ?? "eddsa-rdfc-2022",
+    cryptosuite: options?.cryptosuite ?? "ecdsa-rdfc-2019",
     created: new Date().toISOString(),
     verificationMethod,
     proofPurpose: options?.proofPurpose ?? "assertionMethod",
@@ -174,10 +174,47 @@ export function resolveDid(did: string): { id: string; controller: string; type:
   const parts = did.split(":");
   if (parts.length < 3) return null;
 
+  const method = parts[1];
+
+  if (method === "key") {
+    const multibaseKey = parts.slice(2).join(":");
+    if (multibaseKey.startsWith("z6Mk")) {
+      return {
+        id: `${did}#${multibaseKey}`,
+        controller: did,
+        type: "Ed25519VerificationKey2020",
+        publicKeyMultibase: multibaseKey,
+      };
+    }
+    if (multibaseKey.startsWith("zDn")) {
+      return {
+        id: `${did}#${multibaseKey}`,
+        controller: did,
+        type: "EcdsaSecp256r1VerificationKey2019",
+        publicKeyMultibase: multibaseKey,
+      };
+    }
+    return {
+      id: `${did}#${multibaseKey}`,
+      controller: did,
+      type: "MultibaseVerificationKey",
+      publicKeyMultibase: multibaseKey,
+    };
+  }
+
+  if (method === "web") {
+    return {
+      id: `${did}#key-1`,
+      controller: did,
+      type: "JsonWebKey2020",
+      publicKeyMultibase: undefined,
+    };
+  }
+
   return {
     id: `${did}#key-1`,
     controller: did,
-    type: "Ed25519VerificationKey2020",
+    type: "VerificationKey",
     publicKeyMultibase: undefined,
   };
 }
