@@ -9,7 +9,7 @@ import { enforceAction, batchEnforce, getEnforcementPolicy, isEnforcementError }
 import type { PEPOptions } from "./pep.js";
 import type { ManagementAPI } from "./management.js";
 
-const SDK_VERSION = "0.91.0";
+const SDK_VERSION = "0.92.0";
 
 export interface PEPHttpRequest {
   method: string;

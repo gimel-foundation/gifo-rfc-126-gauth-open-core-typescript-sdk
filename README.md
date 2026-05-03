@@ -1,6 +1,6 @@
 # GAuth Open Core SDK
 
-**Version 0.91.0 — Public Preview**
+**Version 0.92.0 — Public Preview**
 
 **Reference implementation of the GAuth authorization protocol for AI agent governance.**
 

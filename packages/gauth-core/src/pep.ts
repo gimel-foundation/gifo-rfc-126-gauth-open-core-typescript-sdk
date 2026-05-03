@@ -28,7 +28,7 @@ import {
 import { matchGlob } from "./crypto.js";
 import { validateExtendedToken, type TokenValidationOptions, GAuthTokenError } from "./token.js";
 
-const SDK_VERSION = "0.91.0";
+const SDK_VERSION = "0.92.0";
 
 export interface PEPOptions {
   tokenValidation?: TokenValidationOptions;

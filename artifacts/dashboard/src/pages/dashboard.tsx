@@ -83,7 +83,7 @@ export default function DashboardPage() {
             </div>
             <div className="flex items-center justify-between">
               <span className="text-sm">SDK Version</span>
-              <Badge variant="secondary">v0.91.0</Badge>
+              <Badge variant="secondary">v0.92.0</Badge>
             </div>
             <div className="flex items-center justify-between">
               <span className="text-sm">Interface Version</span>

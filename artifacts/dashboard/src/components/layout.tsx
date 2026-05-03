@@ -30,7 +30,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
             </div>
             <div>
               <h1 className="font-semibold text-sidebar-foreground text-sm">GAuth Governance</h1>
-              <p className="text-xs text-muted-foreground">v0.91.0 Public Preview</p>
+              <p className="text-xs text-muted-foreground">v0.92.0 Public Preview</p>
             </div>
           </div>
         </div>
