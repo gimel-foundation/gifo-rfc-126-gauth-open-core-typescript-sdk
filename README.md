@@ -1,6 +1,6 @@
 # GAuth Open Core SDK
 
-**Version 0.92.0 — Public Preview**
+**Version 0.9.3 — Public Preview**
 
 **Reference implementation of the GAuth authorization protocol for AI agent governance.**
 
@@ -135,6 +135,8 @@ This SDK uses a dual-layer licensing model. Both licenses coexist — they do no
 | Open specifications (RFCs) | Apache 2.0 | Interoperability protocols (RFC 0116, 0117, 0118) | No — irrevocable |
 
 **In practice:** You may run the SDK in pure Open Core mode (MPL 2.0 only, self-hosted, no Gimel services) indefinitely. If you choose to use proprietary Gimel services, the Gimel Technologies ToS applies *in addition to* MPL 2.0 — not as a replacement. Your SDK code and modifications to SDK files remain MPL 2.0 regardless.
+
+**CCPE Integration:** This SDK is published by the Gimel Foundation under MPL 2.0. The SDK may be used standalone under the MPL 2.0 terms alone. When integrated into a CCPE architecture pattern as defined by the Gimel Conformance Framework, the normative requirements of the applicable CCPE RFCs additionally apply.
 
 See [LICENSE](packages/gauth-core/LICENSE) and [ADDITIONAL-TERMS.md](packages/gauth-core/ADDITIONAL-TERMS.md) for the full legal text.
 
